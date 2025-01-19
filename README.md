@@ -32,13 +32,15 @@ IFMCAP is organized into *Modules*. Each *Module* is organized into *Tasks*. Her
 
 The tool works by:
 
-1. In each module (folder) a *pipelines.flow* text file contains definitions of pipelines of the module. The contents are in json and contain the tasks. In case we need to run the task with a different value than that of the configuration variables o
+1. In each module (folder) a *module.flow.json* text file contains definitions of pipelines of the module. The contents are in json and contain the tasks. In case we need to run the task with a different value than that of the configuration variables o
 
 2. In each self-contained script that corresponds to a task, inline annotations provide information on the task (e.g input and output files, configuration parameters, etc.)
 
-3. For each module in IFMCAP, the module.flow and the script annotations are parsed. The file workflows.flow is created.
+3. For each module in IFMCAP, the module.flow.json and the script annotations are parsed. The file *ifmcap_flow.db.json* is created that is a database of the tasks and the pipelines.
 
-4. A script allows one to browse the modules tasks and pipelines. It also allows to execute a tak or a pipeline.
+4. The *ifmcap_flow.py* script contains commands that allows to execute a tak or a pipeline.
+
+5. A GUI allows to create/edit pipelines from tasks. It shows the available tasks per module. It allows to change the default script parameters.
 
 ### Command line
 
