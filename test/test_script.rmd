@@ -1,0 +1,25 @@
+---
+title: "Simple R Markdown Test Script"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+This is a **simple R Markdown document** for testing purposes. It demonstrates how to use Markdown for formatting and embed R code chunks.
+
+## Basic R Code Chunk
+
+Below is an example of an R code chunk that calculates the sum and mean of a vector:
+
+```{r basic-calculations, echo=TRUE}
+# Create a numeric vector
+numbers <- c(1, 2, 3, 4, 5)
+
+# Calculate the sum and mean
+sum_numbers <- sum(numbers)
+mean_numbers <- mean(numbers)
+
+# Print the results
+list(Sum = sum_numbers, Mean = mean_numbers)
