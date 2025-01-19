@@ -1,0 +1,14 @@
+{
+    "Code_directory": "E:\\IFM_CAP2\\Code",
+    "Database_directory": "E:\\IFM_CAP2\\Database2020",
+    
+    "Rscript_exe": "C:\\Users\\kremmdi\\AppData\\Local\\Microsoft\\AppV\\Client\\Integration\\602C1D12-9652-4057-A07E-CB0228E7F453\\Root\\R\\R-4.4.0\\bin\\x64\\Rscript.exe",
+    "Pandoc_dir": "C:\\ProgramData\\AppV\\602C1D12-9652-4057-A07E-CB0228E7F453\\85A1D5A1-4087-4C69-8C04-0A9D6316AE4C\\Root\\RStudio\\resources\\app\\bin\\quarto\\bin\\tools",
+    "R_default_args": ["--vanilla"],
+
+    "GAMS_path": "C:\\Users\\kremmdi\\AppData\\Local\\Microsoft\\AppV\\Client\\Integration\\83B2A854-77E5-43C4-B47B-C816EAF40A43\\Root",
+    "GAMS_exe": "%LOCALAPPDATA%\\Microsoft\\AppV\\Client\\Integration\\83B2A854-77E5-43C4-B47B-C816EAF40A43\\Root\\gams.exe",
+    "GAMS_default_args": [],
+
+    "Use_cpu_perc": 1
+}

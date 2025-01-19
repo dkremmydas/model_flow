@@ -1,0 +1,11 @@
+[
+    {
+        "pipeline": "run_all",
+        "default": 1,
+        "module": "v.main2020/d.policy",
+        "tasks": [
+            {"task": "1_create_policy_data"},
+            {"task": ""}
+        ]         
+    }
+]

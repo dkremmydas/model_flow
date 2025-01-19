@@ -99,7 +99,8 @@ A list of accepted annotation their semantics and their attributes are below:
 - @IFMCAP_config: A configuration variable (e.g. an input file, output file or another config variable). The next line will have the default value in the file
   - Explicit attributes:
     - name: the name of the variable
-    - type: {input_file, output_file, config_var}
+    - type: {number, string}
+    - role: {input_file, output_file, config_var}
     - relative: {0,1} Relative to the DatabaseDirectory? 1=yes and 0=no; default is 1
   - Implicit attributes:
     - script_name: the name as defined in the script
