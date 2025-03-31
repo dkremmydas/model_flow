@@ -49,9 +49,68 @@ class Task:
         if self.filetype in (".r", ".rmd"):
             self._parse_file_R(lines)            
         elif self.filetype == ".gms":
-            annotation_pattern = r'^\*\s*@IFMCAP_(\w+):\s*(.*)$'
+            self._parse_file_GAMS(lines)
         else:
             return  # Unsupported file type
+        
+    
+    def _parse_file_GAMS(self, lines):
+        """
+        Parses annotations from a GAMS (.gms) file
+        """
+
+        # Annotation pattern for GAMS
+        annotation_pattern = r'^\*\s*@IFMCAP_(\w+):?\s*(.*)$'
+
+        isDescriptionLine = False
+
+        for line_number, line in enumerate(lines, start=1):
+            line = line.strip()
+
+            match = re.search(annotation_pattern, line)
+
+            if match:
+                key, value = match.groups()
+                key = key.strip()
+                value = value.strip()
+
+                if key == "task":
+                    task_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    self.name = task_attributes.get("name", False)
+                    self.module = task_attributes.get("module", False)
+                    self.previous = task_attributes.get("previous", False)
+
+                elif key == "config":
+                    config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+
+                    # Read the next line for the script values
+                    if line_number < len(lines):
+                        next_line = lines[line_number].strip()
+
+                        # Match assignment in GAMS syntax
+                        default_match = re.match(r'^\s*(\w+)\s*=\s*(.*?);$', next_line)
+
+                        if default_match:
+                            config_attributes['script_name'] = default_match.group(1).strip()
+                            config_attributes['script_value'] = default_match.group(2).strip()
+
+                    self.config.append(config_attributes)
+
+                elif key == "description_start":
+                    isDescriptionLine = True
+
+                elif key == "description_end":
+                    isDescriptionLine = False
+
+            else:
+                if isDescriptionLine:
+                    if line and any(char.isalpha() for char in line):
+                        self.description += f"\n{line}"
+
+        # Assign task details if available
+        if self.name and self.module:
+            print(f"Parsed task: {self.name} from module: {self.module}")
+
 
 
     def _parse_file_R(self,lines):

@@ -59,12 +59,21 @@ The commands are:
     - --dir="{ifmcap root directory}"
     - --module="{the module of ifmcap that contains the task}"
     - --task="{the task name}"
+  - Optional parameters:
+    - --parallel="[{parameter: xxx, from: yy, to: zzz, list: fff}]"
 
 - run_pipeline: run a pipeline
   - Required parameters:
     - --dir="{ifmcap root directory}"
     - --module="{the module of ifmcap that contains the task}"
     - --pipeline="{the pipeline name}"
+
+- list_tasks: list the available tasks
+  - Required parameters:
+    - --dir="{ifmcap root directory}"
+  - Optional parameters:
+    - --module="{the module of ifmcap that contains the task}"
+
 
 ## Annotations
 
@@ -76,7 +85,7 @@ Examples of valid annotations are below:
 
 - #@IFMCAP_task name="Compile external data" module="d.econ_social_ind"
 - #@IFMCAP_description_start
-- #@IFMCAP_config name="external_data" type="config_var" relative="0"
+- #@IFMCAP_config name="external_data" type="parameter" relative="0"
 
 Attributes are of two types:
 
@@ -99,9 +108,23 @@ A list of accepted annotation their semantics and their attributes are below:
 - @IFMCAP_config: A configuration variable (e.g. an input file, output file or another config variable). The next line will have the default value in the file
   - Explicit attributes:
     - name: the name of the variable
-    - type: {number, string}
-    - role: {input_file, output_file, config_var}
-    - relative: {0,1} Relative to the DatabaseDirectory? 1=yes and 0=no; default is 1
+    - role: {input_file, output_file, parameter}
+    - type: {number, string}; only for role=="parameter
+    - relative: {0,1} Relative to the DatabaseDirectory? 1=yes and 0=no; default is 1; only for role=={"input_file","output_file}
   - Implicit attributes:
     - script_name: the name as defined in the script
     - script_value: the value that exist in the script
+
+## Conventions
+
+### GMS tasks
+
+The gms tasks should contain the following code:
+
+<pre>
+$IFTHENI.controlled NOT %CONTROLLED% == "1"
+* Define config variables inside here
+$ENDIF.controlled
+</pre>
+
+Anytime the script is executed, the CONTROLLED global variable will be set to 1.
