@@ -130,12 +130,18 @@ class ExecutionEngine:
             rscript_path = Path(self.config["Rscript_exe"])
             task_file = Path(task_metadata["file_path"])
             
+            # Convert Windows paths to R-friendly format
+            def r_path(path):
+                return str(path).replace('\\', '/')
+            
             args_list = []
             for param in task_metadata.get("config", []):
                 if all(k in param for k in ['script_name', 'script_value']):
-                    args_list.append(f"{param['script_name']}={param['script_value']}")
+                    # Escape backslashes in parameter values too
+                    value = str(param['script_value']).replace('\\', '/')
+                    args_list.append(f"{param['script_name']}={value}")
 
-            command = [str(rscript_path), str(task_file)] + args_list
+            command = [str(rscript_path), r_path(task_file)] + args_list
             self.logger.info(f"Executing R script: {' '.join(command)}")
             
             return subprocess.call(command)
@@ -151,14 +157,20 @@ class ExecutionEngine:
             pandoc_dir = Path(self.config["Pandoc_dir"])
             task_file = Path(task_metadata["file_path"])
 
+            # Convert Windows paths to R-friendly format
+            def r_path(path):
+                return str(path).replace('\\', '/')
+            
             params_list = []
             for param in task_metadata.get("config", []):
                 if all(k in param for k in ['script_name', 'script_value']):
-                    params_list.append(f"{param['script_name']}='{param['script_value']}'")
+                    # Escape backslashes in parameter values
+                    value = str(param['script_value']).replace('\\', '/')
+                    params_list.append(f"{param['script_name']}='{value}'")
 
             render_script = (
-                f"Sys.setenv(RSTUDIO_PANDOC='{pandoc_dir}'); "
-                f"rmarkdown::render('{task_file}', params=list({', '.join(params_list)}))"
+                f"Sys.setenv(RSTUDIO_PANDOC='{r_path(pandoc_dir)}'); "
+                f"rmarkdown::render('{r_path(task_file)}', params=list({', '.join(params_list)}))"
             )
             command = [str(rscript_path), "-e", render_script]
             self.logger.info(f"Rendering R Markdown: {' '.join(command)}")
