@@ -313,14 +313,92 @@ def run_pipeline(config: str, module: str, pipeline: str) -> None:
     raise NotImplementedError("Pipeline execution not yet implemented")
 
 
+def show_task(config_path: str, module: str, task_name: str) -> None:
+    """
+    Display detailed information about a specific task from the database
+    
+    Args:
+        config_path: Path to the configuration file
+        module: Module name containing the task
+        task_name: Name of task to display
+        
+    Raises:
+        FileNotFoundError: If config or database file doesn't exist
+        ValueError: If module/task not found
+    """
+    try:
+        # Load configuration
+        with open(config_path, 'r') as config_file:
+            config = json.load(config_file)
+        
+        # Locate database file
+        db_path = Path(config["Database_directory"]) / "ifmcap_flow.db.json"
+        if not db_path.exists():
+            raise FileNotFoundError(f"Database file not found at {db_path}. Run 'build' command first.")
+        
+        # Load task database
+        with open(db_path, 'r', encoding='utf-8') as db_file:
+            task_db = json.load(db_file)
+        
+        # Find the requested task
+        if module not in task_db:
+            raise ValueError(f"Module '{module}' not found in database.")
+            
+        task_found = None
+        for task in task_db[module]:
+            if task.get("name") == task_name:
+                task_found = task
+                break
+        
+        if not task_found:
+            raise ValueError(f"Task '{task_name}' not found in module '{module}'.")
+        
+        # Display task information
+        print(f"\nTask Details: {module}/{task_name}")
+        print("=" * 50)
+        print(f"File: {task_found.get('file_path', 'Unknown')}")
+        print(f"Type: {task_found.get('filetype', 'Unknown')}")
+        
+        if 'description' in task_found:
+            print("\nDescription:")
+            print(task_found['description'])
+        
+        if 'previous' in task_found and task_found['previous']:
+            print(f"\nPrevious Task: {task_found['previous']}")
+        
+        if 'config' in task_found and task_found['config']:
+            print("\nConfiguration Parameters:")
+            for param in task_found['config']:
+                print(f"  {param.get('script_name', 'Unknown')}:")
+                print(f"    Type: {param.get('role', 'parameter')}")
+                print(f"    Default Value: {param.get('script_value', 'Not set')}")
+                if 'description' in param:
+                    print(f"    Description: {param['description']}")
+                print()
+        
+        print("=" * 50)
+        
+    except Exception as e:
+        logger.error(f"Failed to show task '{module}/{task_name}': {str(e)}")
+        raise
+
+
 def main():
     """Main entry point for the IFMCAP Flow CLI"""
     parser = argparse.ArgumentParser(
         description="IFMCAP Flow - Modular workflow management system",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False
     )
     
-    subparsers = parser.add_subparsers(dest='command', required=True)
+    # Add a custom help option
+    parser.add_argument(
+        '-h', '--help',
+        action='store_true',
+        help='Show this help message and exit'
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', required=False)
     
     # Build command
     build_parser = subparsers.add_parser('build', help='Build the task database')
@@ -384,22 +462,69 @@ def main():
         help='Pipeline name to execute'
     )
     
+    # Add show_task command parser
+    show_parser = subparsers.add_parser('show_task', help='Display detailed information about a specific task')
+    show_parser.add_argument(
+        '--config',
+        required=True,
+        help='Configuration file path'
+    )
+    show_parser.add_argument(
+        '--module',
+        required=True,
+        help='Module containing the task'
+    )
+    show_parser.add_argument(
+        '--task',
+        required=True,
+        help='Task name to display'
+    )
+    
     args = parser.parse_args()
+    
+    # Show help if no arguments or --help flag
+    if len(sys.argv) == 1 or args.help:
+        print("\nIFMCAP Flow - Available Commands:")
+        print("=================================")
+        print("1. build - Build the task database")
+        print("   Usage: python ifmcap_flow.py build --config=<config_file>")
+        
+        print("\n2. list_tasks - List available tasks")
+        print("   Usage: python ifmcap_flow.py list_tasks --config=<config_file> [--module=<module_name>]")
+        
+        print("\n3. run_task - Execute a single task")
+        print("   Usage: python ifmcap_flow.py run_task --config=<config_file> --module=<module> --task=<task> [--parallel]")
+        
+        print("\n4. run_pipeline - Execute a pipeline")
+        print("   Usage: python ifmcap_flow.py run_pipeline --config=<config_file> --module=<module> --pipeline=<pipeline>")
+        
+        print("\n5. show_task - Display detailed task information")
+        print("   Usage: python ifmcap_flow.py show_task --config=<config_file> --module=<module> --task=<task>")
+        
+        print("\n6. help - Show this help message")
+        print("   Usage: python ifmcap_flow.py --help")
+        
+        print("\nFor detailed help on each command, use: python ifmcap_flow.py <command> --help")
+        sys.exit(0)
     
     try:
         if args.command == 'build':
-            build(args.config)  # Changed from args.dir to args.config
+            build(args.config)
         elif args.command == 'run_task':
             run_task(args.config, args.module, args.task, args.parallel)
         elif args.command == 'run_pipeline':
             run_pipeline(args.config, args.module, args.pipeline)
         elif args.command == 'list_tasks':
-            list_tasks(args.config, args.module)  # Changed from args.dir to args.config
+            list_tasks(args.config, args.module)
+        elif args.command == 'show_task':  # New command
+            show_task(args.config, args.module, args.task)
+        else:
+            parser.print_help()
+            sys.exit(1)
             
     except Exception as e:
         logger.error(f"Command failed: {str(e)}")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
