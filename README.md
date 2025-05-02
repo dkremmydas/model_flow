@@ -1,4 +1,4 @@
-# IFMCAP flow
+# Model flow
 
 ## Introduction
 
