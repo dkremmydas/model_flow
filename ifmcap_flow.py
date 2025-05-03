@@ -26,6 +26,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def parse_range_args(range_args):
+    """Convert range arguments to value lists"""
+    ranges = {}
+    for var, start, end, step in (range_args or []):
+        ranges[var] = list(np.arange(float(start), float(end), float(step)))
+    return ranges
+
+def parse_value_args(value_args):
+    """Convert value arguments to lists"""
+    values = {}
+    for args in (value_args or []):
+        var = args[0]
+        values[var] = [parse_override_value(v) for v in args[1:]]
+    return values
+
+
 def parse_modules(directory: str) -> Dict:
     """
     Recursively parse modules and tasks from the given directory.
@@ -142,7 +158,7 @@ def build(config_path: str) -> None:
 
 def list_tasks(config_path: str, module_filter: Optional[str] = None) -> None:
     """
-    List all available tasks from the database
+    List all available tasks from the database in a clean tree format
     
     Args:
         config_path: Path to the configuration file
@@ -154,66 +170,52 @@ def list_tasks(config_path: str, module_filter: Optional[str] = None) -> None:
         KeyError: If required config keys are missing
     """
     try:
-        # Load configuration
-        try:
-            with open(config_path, 'r') as config_file:
-                config = json.load(config_file)
-        except FileNotFoundError:
-            logger.error(f"Configuration file not found: {config_path}")
-            raise
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in config file: {config_path}")
-            raise
+        # Load and validate configuration
+        with open(config_path, 'r') as config_file:
+            config = json.load(config_file)
         
-        # Validate config structure
-        try:
-            db_dir = Path(config["Database_directory"])
-            db_path = db_dir / "ifmcap_flow.db.json"
-        except KeyError:
-            logger.error("Missing 'Database_directory' in config file")
-            raise
-        
-        # Check database existence
+        db_path = Path(config["Database_directory"]) / "ifmcap_flow.db.json"
         if not db_path.exists():
-            logger.error(f"Database file not found at {db_path}. Run 'build' command first.")
-            raise FileNotFoundError(f"Database file not found: {db_path}")
+            raise FileNotFoundError(f"Database file not found at {db_path}. Run 'build' command first.")
         
-        # Load database
-        try:
-            with open(db_path, 'r', encoding='utf-8') as f:
-                modules = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in database file: {db_path}")
-            raise
+        with open(db_path, 'r', encoding='utf-8') as f:
+            modules = json.load(f)
         
         # Apply module filter if specified
         if module_filter:
             modules = {k: v for k, v in modules.items() if k == module_filter}
             if not modules:
-                logger.warning(f"No tasks found in module: {module_filter}")
+                print(f"\nNo tasks found in module: {module_filter}")
                 return
         
-        # Display task listing
-        logger.info("Available tasks:")
-        for module_name, tasks in modules.items():
-            logger.info(f"\nModule: {module_name}")
-            for task in tasks:
-                task_name = task.get('name', 'Unnamed Task')
-                task_desc = task.get('description', 'No description available')
-                logger.info(f"  • {task_name}")
-                logger.info(f"    Description: {task_desc[:80]}{'...' if len(task_desc) > 80 else ''}")
-                logger.info(f"    File: {task.get('file_path', 'Unknown')}")
+        # Clean output formatting
+        print("\n┌───────────────────────────────────────┐")
+        print("│        IFMCAP TASK DIRECTORY        │")
+        print("└───────────────────────────────────────┘")
         
-        # Summary count
-        total_modules = len(modules)
+        for module_idx, (module_name, tasks) in enumerate(modules.items(), 1):
+            # Module header with subtle divider
+            if module_idx > 1:
+                print("  │")
+            print(f"  ┌── {module_name}")
+            
+            # Task listing
+            for task_idx, task in enumerate(tasks, 1):
+                prefix = "  │   ├─" if task_idx < len(tasks) else "  │   └─"
+                print(f"{prefix} {task.get('name', 'Unnamed Task')}")
+        
+        # Summary footer
         total_tasks = sum(len(tasks) for tasks in modules.values())
-        logger.info(f"\nFound {total_tasks} tasks across {total_modules} modules")
+        print("\n  📂 Total modules:", len(modules))
+        print("  📝 Total tasks:  ", total_tasks)
+        print("─" * 40)
         
     except Exception as e:
         logger.error(f"Failed to list tasks: {str(e)}")
         raise
 
-def run_task(config_path: str, module: str, task_name: str, parallel: bool = False) -> int:
+def run_task(config_path: str, module: str, task_name: str, parallel: bool = False, 
+             output_dir: Optional[str] = None, parameters: Optional[dict] = None) -> int:
     """
     Execute a specific task by finding it in the database and running it
     
@@ -222,6 +224,8 @@ def run_task(config_path: str, module: str, task_name: str, parallel: bool = Fal
         module: Module name containing the task
         task_name: Name of task to execute
         parallel: Whether to run in parallel mode
+        output_dir: Optional directory for output files (defaults to Temporary_directory from config)
+        parameters: Optional dict of parameters to override task config (format: {param_name: value})
         
     Returns:
         Exit code from task execution
@@ -277,19 +281,40 @@ def run_task(config_path: str, module: str, task_name: str, parallel: bool = Fal
         if not task_found:
             raise ValueError(f"Task '{task_name}' not found in module '{module}'.")
         
+        # Merge command line parameters with task config
+        if parameters:
+            if 'config' not in task_found:
+                task_found['config'] = []
+            for param_name, param_value in parameters.items():
+                # Update if parameter exists, otherwise add new
+                param_exists = False
+                for param in task_found['config']:
+                    if param['script_name'] == param_name:
+                        param['script_value'] = param_value
+                        param_exists = True
+                        break
+                if not param_exists:
+                    task_found['config'].append({
+                        'script_name': param_name,
+                        'script_value': param_value
+                    })
+        
         logger.info(f"Found task: {module}/{task_name}")
-        logger.debug(f"Task details: {json.dumps(task_found, indent=2)}")
+        logger.debug(f"Task details: {json.dumps(task_found, indent=2)}")       
         
         # Create execution engine with full config
         engine = ExecutionEngine(config_path)
         
+        # Determine output directory (command line arg > config > default)
+        final_output_dir = output_dir or config.get("Temporary_directory")
+        
         # Execute based on parallel flag
         if parallel:
             with ThreadPoolExecutor() as executor:
-                future = executor.submit(engine.execute_task, module, task_name)
+                future = executor.submit(engine.execute_task, module, task_name, final_output_dir)
                 result = future.result()
         else:
-            result = engine.execute_task(module, task_name)
+            result = engine.execute_task(module, task_name, final_output_dir,task_metadata=task_found  )
         
         logger.info(f"Task '{module}/{task_name}' completed with exit code: {result}")
         return result
@@ -439,10 +464,37 @@ def main():
         help='Task name to execute'
     )
     run_task_parser.add_argument(
+        '--set',
+        action='append',
+        metavar='PARAM=VALUE',
+        help='Set task parameters in PARAM=VALUE format',
+        type=lambda x: x.split('=', 1)  # Split on first '=' only
+    )
+    run_task_parser.add_argument(
+        '--range',
+        action='append',
+        nargs=4,
+        metavar=('CONFIG_VAR', 'START', 'END', 'STEP'),
+        help='Execute task with a range of values (creates parallel jobs)'
+    )
+    run_task_parser.add_argument(
+        '--values',
+        action='append',
+        nargs='+',
+        metavar=('VAR', 'VALUES'),
+        help='Execute task with specific values (first value is config var, rest are values)'
+    )
+    run_task_parser.add_argument(
         '--parallel',
         action='store_true',
         help='Run task in parallel mode'
     )
+    run_task_parser.add_argument(
+        '--output_dir',
+        type=str,
+        help='Directory where log/output files will be saved (defaults to Temporary_directory from config)'
+    )
+
     
     # Run pipeline command
     run_pipeline_parser = subparsers.add_parser('run_pipeline', help='Execute a pipeline')
@@ -511,7 +563,16 @@ def main():
         if args.command == 'build':
             build(args.config)
         elif args.command == 'run_task':
-            run_task(args.config, args.module, args.task, args.parallel)
+            # Convert --set parameters to dict
+            params = dict(args.set) if args.set else None
+            run_task(
+                args.config,
+                args.module,
+                args.task,
+                args.parallel,
+                args.output_dir,
+                parameters=params  # Pass the --set parameters here
+            )
         elif args.command == 'run_pipeline':
             run_pipeline(args.config, args.module, args.pipeline)
         elif args.command == 'list_tasks':

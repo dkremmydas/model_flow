@@ -3,6 +3,8 @@ import json
 import subprocess
 import logging
 from pathlib import Path
+from datetime import datetime
+from typing import Optional
 
 
 class ExecutionEngine:
@@ -81,13 +83,16 @@ class ExecutionEngine:
             self.logger.error(f"Task lookup failed: {str(e)}")
             raise
 
-    def execute_task(self, module, task_name):
+    def execute_task(self, module: str, task_name: str, output_dir: Optional[str] = None, 
+               task_metadata: Optional[dict] = None) -> int:
         """
         Execute the given task based on its metadata.
 
         Parameters:
             module (str): The module name.
             task_name (str): The task name.
+            output_dir (str, optional): Directory for output files. Defaults to config's Temporary_directory.
+            task_metadata: Optional pre-loaded task metadata (avoids DB lookup)
 
         Returns:
             int: The return code of the executed process.
@@ -97,7 +102,8 @@ class ExecutionEngine:
             RuntimeError: If execution fails
         """
         try:
-            task_metadata = self.find_task(module, task_name)
+            # Use provided metadata or look it up
+            task_meta = task_metadata if task_metadata else self.find_task(module, task_name)
             self.logger.info(f"Executing task: {module}/{task_name}")
 
             # Validate required fields
@@ -110,11 +116,14 @@ class ExecutionEngine:
             if not task_file.exists():
                 raise FileNotFoundError(f"Task file not found: {task_file}")
 
+            # Determine output directory (parameter > config > None)
+            final_output_dir = output_dir or self.config.get("Temporary_directory")
+            
             # Execute based on file type
             if filetype == ".r":
                 return self._execute_r_task(task_metadata)
             elif filetype == ".rmd":
-                return self._execute_rmd_task(task_metadata)
+                return self._execute_rmd_task(task_metadata, final_output_dir)  # Pass output_dir
             elif filetype == ".gms":
                 return self._execute_gams_task(task_metadata)
             else:
@@ -123,7 +132,8 @@ class ExecutionEngine:
         except Exception as e:
             self.logger.error(f"Task execution failed: {str(e)}")
             raise RuntimeError(f"Failed to execute task {module}/{task_name}: {str(e)}") from e
-
+    
+    
     def _execute_r_task(self, task_metadata):
         """Execute an R script task."""
         try:
@@ -150,35 +160,85 @@ class ExecutionEngine:
             self.logger.error(f"R task execution failed: {str(e)}")
             raise
 
-    def _execute_rmd_task(self, task_metadata):
-        """Execute an R Markdown task."""
+    def _execute_rmd_task(self, task_metadata, output_dir=None):
+        """Execute an R Markdown task with output directory support and strict type handling."""
         try:
+            # Get required paths from config
             rscript_path = Path(self.config["Rscript_exe"])
             pandoc_dir = Path(self.config["Pandoc_dir"])
+            gams_dir = Path(self.config["GAMS_path"])
             task_file = Path(task_metadata["file_path"])
 
-            # Convert Windows paths to R-friendly format
+            # Set output directory (default to config's Temporary_directory or current dir)
+            output_dir = Path(output_dir or self.config.get("Temporary_directory", "."))
+            if not output_dir.exists():
+                raise FileNotFoundError(f"Output directory does not exist: {output_dir}")
+            if not output_dir.is_dir():
+                raise NotADirectoryError(f"Path is not a directory: {output_dir}")
+
+            # Generate output filename
+            task_name = task_metadata.get('name', 'output').replace(' ', '_')
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            output_file = output_dir / f"{task_name}_{timestamp}.html"
+
             def r_path(path):
+                """Convert Windows paths to R-friendly format"""
                 return str(path).replace('\\', '/')
             
+            def format_param_value(param):
+                """Format parameter value according to its type"""
+                value = param['script_value']
+                
+                # Handle numeric parameters
+                if param.get('type') == 'number':
+                    try:
+                        if isinstance(value, (int, float)):
+                            return str(value)
+                        # Convert string to number if needed
+                        return str(float(value) if '.' in str(value) else int(value))
+                    except (ValueError, TypeError):
+                        self.logger.warning(
+                            f"Couldn't convert {param['script_name']} value '{value}' to number"
+                        )
+                
+                # Default string handling
+                return f"'{str(value).replace('\\', '/')}'"
+            
+            # Set environment variables
+            env_script = (
+                f"Sys.setenv(RSTUDIO_PANDOC='{r_path(pandoc_dir)}'); "
+                f"Sys.setenv(PATH=paste('{r_path(gams_dir)}', Sys.getenv('PATH'), sep=';')); "
+            )
+            
+            # Prepare parameters with type handling
             params_list = []
             for param in task_metadata.get("config", []):
                 if all(k in param for k in ['script_name', 'script_value']):
-                    # Escape backslashes in parameter values
-                    value = str(param['script_value']).replace('\\', '/')
-                    params_list.append(f"{param['script_name']}='{value}'")
+                    params_list.append(f"{param['script_name']}={format_param_value(param)}")
 
+            # Build render command with output control
             render_script = (
-                f"Sys.setenv(RSTUDIO_PANDOC='{r_path(pandoc_dir)}'); "
-                f"rmarkdown::render('{r_path(task_file)}', params=list({', '.join(params_list)}))"
+                f"{env_script}"
+                f"rmarkdown::render("
+                f"input = '{r_path(task_file)}', "
+                f"output_file = '{r_path(output_file)}', "
+                f"params = list({', '.join(params_list)}), "
+                f"intermediates_dir = '{r_path(output_dir)}', "
+                f"knit_root_dir = '{r_path(output_dir)}'"
+                f")"
             )
+
             command = [str(rscript_path), "-e", render_script]
-            self.logger.info(f"Rendering R Markdown: {' '.join(command)}")
+            self.logger.info(f"Running {command}")
+            self.logger.info(f"Rendering to {output_file}")
             
-            return subprocess.call(command)
+            result = subprocess.call(command)
+            if result == 0:
+                self.logger.info(f"Successfully created: {output_file}")
+            return result
             
         except Exception as e:
-            self.logger.error(f"R Markdown task execution failed: {str(e)}")
+            self.logger.error(f"R Markdown execution failed: {str(e)}")
             raise
 
     def _execute_gams_task(self, task_metadata):
