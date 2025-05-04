@@ -18,7 +18,7 @@ set PYTHON_EXE=python
 )
 
 :: Pass all arguments to the Python module
-%PYTHON_EXE% -m ifmcap_flow %*
+%PYTHON_EXE% -m model_flow %*
 
 :: Preserve the exit code
 exit /b %ERRORLEVEL%

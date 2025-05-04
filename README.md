@@ -1,12 +1,12 @@
-# IFMCAP flow
+# Model flow
 
 ## Introduction
 
- IFMCAP is comprised of many small independent scripts that transform input data into ouput data. This enables a modular structure that isolates the logic of individual tasks and allows the modular structure of IFMCAP. On the other hand, this compartmentalization of IFMCAPinto numerous small independent tasks, makes it difficult to keep the overarching logic of IFMCAP. For this, IFMCAP flow provides the infrastructure to organize the different small tasks in a more explicit way.
+ In modular design, a model is comprised of many small independent scripts that transform input data into ouput data. This enables a modular structure that isolates the logic of individual tasks and allows the modular structure of a model. On the other hand, this compartmentalization of the model into numerous small independent tasks, makes it difficult to keep the overarching logic of the model. For this, model flow provides the infrastructure to organize the different small tasks in a more explicit way.
 
 ## Terminology
 
-IFMCAP is organized into *Modules*. Each *Module* is organized into *Tasks*. Here’s a glossary of key terms related with the tool.
+A model is organized into *Modules*. Each *Module* is organized into *Tasks*. Here’s a glossary of key terms related with the tool.
 
 1. Module: A collection of Tasks with an overarching logic. By convention, a module is contained inside a unique folder.
 
@@ -14,7 +14,7 @@ IFMCAP is organized into *Modules*. Each *Module* is organized into *Tasks*. Her
 
 3. Pipeline: A structured series of tasks, where the output of one task is the input for the next. It is automated with no manual/human intervention. A Module can have one or more pipelines. Apipeline beolongs to one module.
 
-4. Workflow: A structured series of modules, where the output of one module is the input of another. Workflows belong to IFMCAP model. They are not contained in modules.
+4. Workflow: A structured series of modules, where the output of one module is the input of another. Workflows belong to the model as a whole. They are not contained in modules.
 
 5. Task Dependency: A relationship where one task relies on the completion of another task before it can begin.
 
@@ -34,25 +34,30 @@ The tool works by:
 
 2. In each self-contained script that corresponds to a task, inline annotations provide information on the task (e.g input and output files, configuration parameters, etc.)
 
-3. For each module in IFMCAP, the module.flow.json and the script annotations are parsed. The file *ifmcap_flow.db.json* is created that is a database of the tasks and the pipelines.
+3. For each module, the module.flow.json and the script annotations are parsed. The file *model_flow.db.json* is created that is a database of the tasks and the pipelines.
 
-4. The *ifmcap_flow.py* script contains commands that allows to execute a tak or a pipeline.
+4. The *model_flow.py* script contains commands that allows to execute a tak or a pipeline.
 
 5. A GUI allows to create/edit pipelines from tasks. It shows the available tasks per module. It allows to change the default script parameters.
 
 ## Command line
 
-The main executable is the ifmcap_flow script. We call it like
+The main executable is the model_flow script. We call it like
 
 <pre>
-python ifmcap_flow [command] [parameters]*
+python model_flow [command] [parameters]*
 </pre>
 
 The commands are:
 
+### init
+
+Initializes a configuration file. It asks for the database and th code directory and saves the configuration file into the database directory. When using model_flow for the first time, use this command.
+
+
 ### build
 
-Recursively scans the specified code directory to identify all IFMCAP tasks and creates a centralized database file (`ifmcap_flow.db.json`) in the configured Database_directory.
+Recursively scans the specified code directory to identify all model tasks and creates a centralized database file (`model_flow.db.json`) in the configured Database_directory.
 
 - Required Parameters:
 
@@ -60,8 +65,8 @@ Recursively scans the specified code directory to identify all IFMCAP tasks and 
 
    ```json
    {
-     "Code_directory": "path/to/ifmcap/code",
-     "Database_directory": "path/to/store/database"
+     "Code_directory": "path/to/model/code",
+     "Database_directory": "path/to/model/database"
    }
    ```
 
@@ -105,17 +110,17 @@ Run a pipeline
 
 - list_tasks: list the available tasks
 - Required parameters:
-  - --dir="{ifmcap root directory}"
+  - --dir="{model root directory}"
 - Optional parameters:
-  - --module="{the module of ifmcap that contains the task}"
+  - --module="{the module that contains the task}"
 
 ### show_task
 
 Display detailed information about a specific task.
 
 - Required parameters:
-  - --dir="{ifmcap root directory}"
-  - --module="{the module of ifmcap that contains the task}"
+  - --dir="{model datababase directory}"
+  - --module="{the module that contains the task}"
   - --pipeline="{the pipeline name}"
 
 ### list_tasks
@@ -125,37 +130,37 @@ List all available tasks with filtering options.
 - Required parameters:
   - --config \<file>       Path to configuration JSON file
 - Optional parameters:
-  - --module="{the module of ifmcap that contains the task}"
+  - --module="{the module that contains the task}"
 
 ### Examples
 
 1. Basic execution:
-   - ifmcap_flow build --config "E:/IFM_CAP2/Code/conf/ifmcap_flow.config.json"
-   - ifmcap_flow list_tasks --module="d.estat" --config="E:/IFM_CAP2/Code/conf/ifmcap_flow.config.json"
-   - ifmcap_flow run_task --task="00_initialization" --module="d.fadn" --config="E:/IFM_CAP2/Code/conf/ifmcap_flow.config.json"
-   - ifmcap_flow run_task --task="1_download_and_prepare" --module="d.estat" --output_dir="E:/IFM_CAP2/Database2020/d.estat" --config="E:/IFM_CAP2/Code/conf/ifmcap_flow.config.json"
-   - ifmcap_flow run_task --task="1_import_agri_csv" --module="d.fadn" --output_dir="E:/IFM_CAP2/Database2020/d.fadn" --config="E:/IFM_CAP2/Code/conf/ifmcap_flow.config.json" --set root_csv "E:/IFM_CAP2/original_csv" --set raw_str_map "E:/IFM_CAP2/Model External Data/raw_str_map.2014_and_after.json"
+   - model_flow build --config "E:/IFM_CAP2/Code/conf/model_flow.config.json"
+   - model_flow list_tasks --module="d.estat" --config="E:/IFM_CAP2/Code/conf/model_flow.config.json"
+   - model_flow run_task --task="00_initialization" --module="d.fadn" --config="E:/IFM_CAP2/Database2020/model_flow.config.json"
+   - model_flow run_task --task="1_download_and_prepare" --module="d.estat" --output_dir="E:/IFM_CAP2/Database2020/d.estat" --config="E:/IFM_CAP2/Database2020/model_flow.config.json"
+   - model_flow run_task --task="1_import_agri_csv" --module="d.fadn" --output_dir="E:/IFM_CAP2/Database2020/d.fadn" --config="E:/IFM_CAP2/Code/conf/model_flow.config.json" --set root_csv "E:/IFM_CAP2/original_csv" --set raw_str_map "E:/IFM_CAP2/Model External Data/raw_str_map.2014_and_after.json"
 
 2. With parameter override:
-   ifmcap_flow run_task --config=config.json  --module=v.main2020/d.policy  --task=1_create_policy_data  --set year 2023  --set input_file "data/new_data.csv"
+   model_flow run_task --config=config.json  --module=v.main2020/d.policy  --task=1_create_policy_data  --set year 2023  --set input_file "data/new_data.csv"
 
 3. Parallel execution with value range:
-   ifmcap_flow run_task --config=config.json  --module=model/training  --task=train_model  --parallel  --range learning_rate 0.001 0.01 0.002
+   model_flow run_task --config=config.json  --module=model/training  --task=train_model  --parallel  --range learning_rate 0.001 0.01 0.002
 
 4. Parallel execution with specific values:
-   ifmcap_flow run_task --config=config.json  --module=model/training  --task=train_model  --parallel  --values optimizer "adam" "sgd"  --values batch_size 32 64 128
+   model_flow run_task --config=config.json  --module=model/training  --task=train_model  --parallel  --values optimizer "adam" "sgd"  --values batch_size 32 64 128
 
 ## Annotations
 
-An annotation variable has the following form, {C}@IFMCAP_{annotation} [{attribute name}="{attribute value}]*
+An annotation variable has the following form, {C}@MODELFLOW_{annotation} [{attribute name}="{attribute value}]*
 
 The {C} is the programming language specific comment character. For example in R, {C}=#, in GAMS, {C}=*. 
 
 Examples of valid annotations are below:
 
-- #@IFMCAP_task name="Compile external data" module="d.econ_social_ind"
-- #@IFMCAP_description_start
-- #@IFMCAP_config name="external_data" type="parameter" relative="0"
+- #@MODELFLOW_task name="Compile external data" module="d.econ_social_ind"
+- #@MODELFLOW_description_start
+- #@MODELFLOW_config name="external_data" type="parameter" relative="0"
 
 Attributes are of two types:
 
@@ -164,7 +169,7 @@ Attributes are of two types:
 
 A list of accepted annotation their semantics and their attributes are below
 
-### @IFMCAP_task
+### @MODELFLOW_task
 
 Defines that the source file corresponds to a Task
 
@@ -174,14 +179,14 @@ Defines that the source file corresponds to a Task
   - previous: the task that precedes it
 - Implicit attributes
 
-### @IFMCAP_description_start ... @IFMCAP_description_end
+### @MODELFLOW_description_start ... @MODELFLOW_description_end
 
 Defines lines that provide a description of the source file 
 
 - Implicit attributes
   - description: Any lines between the start and the end of the annotation will be saved in the description attribute of the task
 
-### @IFMCAP_config
+### @MODELFLOW_config
 
 A configuration variable (e.g. an input file, output file or another config variable). The next line will have the default value in the file
 
@@ -194,9 +199,9 @@ A configuration variable (e.g. an input file, output file or another config vari
   - script_name: the name as defined in the script
   - script_value: the value that exist in the script
 
-## How to prepare files for ifmcap_flow
+## How to prepare files for model_flow
 
-For controlling the source files through the ifmcap_flow tool, they need to contains special chunks of code.
+For controlling the source files through the model_flow tool, they need to contains special chunks of code.
 
 The code ensures that the configuration of the script can be exposed to the flow tool.
 
@@ -264,7 +269,7 @@ $ENDIF.controlled
 
 ```rmd
 ---
-#@IFMCAP_task name="1_create_baseline_data" module="v.main2020/d.baseline"
+#@MODELFLOW_task name="1_create_baseline_data" module="v.main2020/d.baseline"
 title: "Create baseline data"
 author: "Lola Rey"
 output: 
@@ -272,40 +277,40 @@ output:
     toc: true
     toc_depth: 5
 params:
-  #@IFMCAP_config name="database_dir" role="config_var" type="string" 
+  #@MODELFLOW_config name="database_dir" role="config_var" type="string" 
   database_dir: "E:/IFM_CAP2/Database2020"
   
-  #@IFMCAP_config name="d_fadn_data_file" role="input_file" relative="0"
+  #@MODELFLOW_config name="d_fadn_data_file" role="input_file" relative="0"
   d_fadn_data_file: "d.fadn/ifm_cap_out/d_fadn_ifm_cap_data_2020.gdx"
   
-  #@IFMCAP_config name="calib_output" role="input_file" relative="0"
+  #@MODELFLOW_config name="calib_output" role="input_file" relative="0"
   calib_output: "v.main2020/d.calibration/output_PMP.gdx"
   
-  #@IFMCAP_config name="feed_data" role="input_file" relative="0"
+  #@MODELFLOW_config name="feed_data" role="input_file" relative="0"
   feed_data: "v.main2020/d.feed/output/estimations/d_feed_data_out_ALL.gdx"
   
-  #@IFMCAP_config name="add_acts_data" role="input_file" relative="0"
+  #@MODELFLOW_config name="add_acts_data" role="input_file" relative="0"
   add_acts_data: "v.main2020/d.add_acts/default/output_add_acts.gdx"
   
-  #@IFMCAP_config name="capri_trend_file2020" role="input_file" relative="0"
+  #@MODELFLOW_config name="capri_trend_file2020" role="input_file" relative="0"
   capri_trend_file2020: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data/capri_data/d.baseline/res_2_1720scenar2040_refdefaulta.gdx" 
   #capri_trend_file2040: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data/capri_data/d.baseline/res_2_1740scenar2040_refdefaulta.gdx"
   
-  #@IFMCAP_config name="capri_trend_file2040" role="input_file" relative="0"
+  #@MODELFLOW_config name="capri_trend_file2040" role="input_file" relative="0"
   capri_trend_file2040: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data/capri_data/p.2024_06_scenar2040/yield_20241013_from_scenar2030/res_2_1740scenar2040_refpol_exotechCSP_all_scenar2040defaulta.gdx"
   
-  #@IFMCAP_config name="CAP_payments" role="input_file" relative="0"
+  #@MODELFLOW_config name="CAP_payments" role="input_file" relative="0"
   CAP_payments: "v.main2020/d.policy/02.payments_without_ecoschemes.gdx"
   
-  #@IFMCAP_config name="ECO_specs"  role="input_file" relative="0"
+  #@MODELFLOW_config name="ECO_specs"  role="input_file" relative="0"
   ECO_specs: "v.main2020/d.policy/02.ecoscheme_specification_conversion.gdx"
   
-  #@IFMCAP_config name="ECO_specs_farm_level"  role="input_file" relative="0"
+  #@MODELFLOW_config name="ECO_specs_farm_level"  role="input_file" relative="0"
   ECO_specs_farm_level: "v.main2020/d.policy/02.ecoscheme_specification_farm_level.gdx"
   
-  #@IFMCAP_config name="external_data" type="parameter" type="string"
+  #@MODELFLOW_config name="external_data" type="parameter" type="string"
   external_data: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data"
   
-  #@IFMCAP_config name="output_dir" type="parameter" type="string"
+  #@MODELFLOW_config name="output_dir" type="parameter" type="string"
   output_dir: "v.main2020/d.baseline/"
   ```

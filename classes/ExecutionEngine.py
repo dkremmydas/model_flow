@@ -9,7 +9,7 @@ from typing import Optional
 
 class ExecutionEngine:
     """
-    Execution engine to run tasks based on their metadata from ifmcap_flow.db.json.
+    Execution engine to run tasks based on their metadata from model_flow.db.json.
     Uses a configuration file to locate executables and set default parameters.
     """
 
@@ -39,9 +39,9 @@ class ExecutionEngine:
                     raise KeyError(f"Missing required config key: {key}")
 
             # Load flow database from configured Database_directory
-            db_path = Path(self.config["Database_directory"]) / "ifmcap_flow.db.json"
+            db_path = Path(self.config["Database_directory"]) / "model_flow.db.json"
             if not db_path.exists():
-                raise FileNotFoundError(f"IFMCAP flow database not found: {db_path}")
+                raise FileNotFoundError(f"Model flow database not found: {db_path}")
             
             with open(db_path, 'r') as db_file:
                 self.flow_db = json.load(db_file)

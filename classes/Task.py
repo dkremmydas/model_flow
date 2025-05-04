@@ -60,7 +60,7 @@ class Task:
         """
 
         # Annotation pattern for GAMS
-        annotation_pattern = r'^\*\s*@IFMCAP_(\w+):?\s*(.*)$'
+        annotation_pattern = r'^\*\s*@MODELFLOW_(\w+):?\s*(.*)$'
 
         isDescriptionLine = False
 
@@ -119,7 +119,7 @@ class Task:
         """
         
         # Determine the annotation pattern based on the file extension
-        annotation_pattern = r'^\s*#@IFMCAP_(\w+)\s*(.*)$'
+        annotation_pattern = r'^\s*#@MODELFLOW_(\w+)\s*(.*)$'
                     
         isDescriptionLine = 0    
 
