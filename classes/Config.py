@@ -14,6 +14,10 @@ class Config:
         "Rscript_exe": "Enter the path to the Rscript executable: ",
         "GAMS_exe": "Enter the path to the gams executable: "
     }
+    
+    DIRECTORY_KEYS = ["Code_directory", "Database_directory"]  # Keys that must be valid directories
+    
+    
 
     def __init__(self, config_path: str = None, json_string: str = None):
         """
@@ -125,10 +129,15 @@ class Config:
         """
         print("Creating a new configuration...")
         data = {}
+
         for key, prompt in Config.REQUIRED_KEYS.items():
             value = input(prompt).strip()
+            if key in Config.DIRECTORY_KEYS:
+                path = Path(value)
+                if not path.is_dir():
+                    raise ValueError(f"The provided path for '{key}' is not a valid directory: {value}")
             data[key] = value
-            
+
         json_string = json.dumps(data)
         config = Config(json_string=json_string)
         return config
