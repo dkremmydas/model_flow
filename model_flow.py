@@ -449,9 +449,11 @@ def main():
         config = Config(args.config)  # Load the config file
         
         if config.is_empty():
-            logger.error(f"Problem with loading configuration file: {args.config}")
+            logger.error(f"Failed to read valid configuration at {args.config}. Exiting.")
             sys.exit(1)
-            
+        else:
+            logger.info(f"Found model_flow.config.json at {args.config}.")
+    
         
     
     try:

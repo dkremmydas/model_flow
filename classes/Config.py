@@ -1,11 +1,16 @@
 import json
 from pathlib import Path
 
+import logging
+
 
 class Config:
     """
     A class to manage the configuration for the Model Flow application.
     """
+    
+    # Initialize the logger for the Config class
+    logger = logging.getLogger(__name__)
 
     # Static dictionary of key parameters
     REQUIRED_KEYS = {
@@ -32,38 +37,48 @@ class Config:
         self.data = None
         
         if not config_source:
-            print("Error: The 'config_source' parameter must be provided.")
+            self.logger.error("No configuration source provided.")
             return
-
-        print(config_source)
-        
-        
+       
 
         try:
             # Check if the provided config_source is a valid JSON string
             self.data = json.loads(config_source)
             self.config_path = None
+            self.logger.info(f"Configuration loaded from JSON string.")
         except json.JSONDecodeError:
             # If not a JSON string, assume it's a file path
-            self.config_path = Path(config_source)
-            if self.config_path.exists():
-                try:
-                    self.load()
-                except Exception as e:
-                    print(f"Error loading configuration: {e}")
-                    self.data = None
+            
+            if Path(config_source).exists() and Path(config_source).is_file():
+                self.config_path = Path(config_source)
+            elif Path(config_source).exists() and Path(config_source).is_dir():  
+                self.config_path = Path(config_source) / "model_flow.config.json"
             else:
-                print(f"Error: Configuration file not found at {self.config_path}.")
+                self.logger.error(f"Configuration file not found at {config_source}.")
+                return      
+            
+            try:
+                self.load()
+                self.logger.info(f"Configuration loaded from {self.config_path}")
+            except Exception as e:
+                self.logger.error(f"Error loading configuration: {e}")
                 self.data = None
+                return
+                    
+                    
         except Exception as e:
-            print(f"Error initializing configuration: {e}")
+            self.logger.error(f"Error initializing configuration: {e}")
             self.data = None
+            return
+        
+       
+
             
         # Validate the required keys
         try:
             self.validate_required_keys()
         except ValueError as e:
-            print(f"Validation error: {e}")
+            classes.Logger.error(f"Validation error: {e}")
             self.data = None
     
         
