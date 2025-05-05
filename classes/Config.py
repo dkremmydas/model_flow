@@ -11,54 +11,62 @@ class Config:
     REQUIRED_KEYS = {
         "Code_directory": "Enter the path to the Code directory: ",
         "Database_directory": "Enter the path to the Database directory: ",
+        "Temporary_directory": "Enter the path to the Temporary directory: ",
         "Rscript_exe": "Enter the path to the Rscript executable: ",
         "GAMS_exe": "Enter the path to the gams executable: "
     }
     
     DIRECTORY_KEYS = ["Code_directory", "Database_directory"]  # Keys that must be valid directories
     
+    DIRECTORY_CREATE = ["Temporary_directory"]  # Keys that must be created if not exist
+    
     
 
-    def __init__(self, config_path: str = None, json_string: str = None):
+    def __init__(self, config_source: str = None):
         """
         Initialize the Config object.
 
         Parameters:
-            config_path (str): Path to the configuration JSON file.
-            json_string (str): JSON string to initialize the configuration.
+            config_source (str): Path to the configuration JSON file or a JSON string.
         """
-        self.data = {}
+        self.data = None
+        
+        if not config_source:
+            print("Error: The 'config_source' parameter must be provided.")
+            return
 
-        if config_path and json_string:
-            raise ValueError("Only one of 'config_path' or 'json_string' should be provided.")
+        print(config_source)
+        
+        
 
-        if config_path:
-            self.config_path = Path(config_path)
-            # Load the configuration file if it exists
-            if self.config_path.exists():
-                self.load()
-            else:
-                print(f"Configuration file not found at {self.config_path}. A new one will be created.")
-        elif json_string:
+        try:
+            # Check if the provided config_source is a valid JSON string
+            self.data = json.loads(config_source)
             self.config_path = None
-            try:
-                self.data = json.loads(json_string)
-            except json.JSONDecodeError as e:
-                raise ValueError("Invalid JSON string provided.") from e
-        else:
-            raise ValueError("Either 'config_path' or 'json_string' must be provided.")
-
-        if config_path:
-            self.config_path = Path(config_path)
-            self.data = {}
-
-            # Load the configuration file if it exists
+        except json.JSONDecodeError:
+            # If not a JSON string, assume it's a file path
+            self.config_path = Path(config_source)
             if self.config_path.exists():
-                self.load()
+                try:
+                    self.load()
+                except Exception as e:
+                    print(f"Error loading configuration: {e}")
+                    self.data = None
             else:
-                print(f"Configuration file not found at {self.config_path}. A new one will be created.")
-        else:
-            self.config_path = None
+                print(f"Error: Configuration file not found at {self.config_path}.")
+                self.data = None
+        except Exception as e:
+            print(f"Error initializing configuration: {e}")
+            self.data = None
+            
+        # Validate the required keys
+        try:
+            self.validate_required_keys()
+        except ValueError as e:
+            print(f"Validation error: {e}")
+            self.data = None
+    
+        
 
     def load(self):
         """
@@ -71,18 +79,19 @@ class Config:
             raise ValueError(f"Invalid JSON in configuration file: {self.config_path}") from e
         except Exception as e:
             raise RuntimeError(f"Failed to load configuration: {str(e)}") from e
+    
+    
+    def validate_required_keys(self):
+        """
+        Validate that all required keys exist in the configuration.
 
-    def save(self):
+        Raises:
+            ValueError: If any required key is missing from the configuration.
         """
-        Save the current configuration to the JSON file.
-        """
-        try:
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the directory exists
-            with open(self.config_path, "w", encoding="utf-8") as config_file:
-                json.dump(self.data, config_file, indent=4)
-            print(f"Configuration saved to {self.config_path}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to save configuration: {str(e)}") from e
+        missing_keys = [key for key in self.REQUIRED_KEYS if key not in self.data]
+        if missing_keys:
+            raise ValueError(f"The configuration file is missing required keys: {', '.join(missing_keys)}")
+
 
     def get(self, key: str, default=None):
         """
@@ -96,16 +105,6 @@ class Config:
             The value associated with the key, or the default value if the key is not found.
         """
         return self.data.get(key, default)
-
-    def set(self, key: str, value):
-        """
-        Set a configuration value.
-
-        Parameters:
-            key (str): The key to set.
-            value: The value to associate with the key.
-        """
-        self.data[key] = value
 
     def __str__(self):
         """
@@ -136,10 +135,18 @@ class Config:
                 path = Path(value)
                 if not path.is_dir():
                     raise ValueError(f"The provided path for '{key}' is not a valid directory: {value}")
+            elif key in Config.DIRECTORY_CREATE:
+                path = Path(value)
+                if not path.exists():
+                    print(f"The directory for '{key}' does not exist. Creating it at: {value}")
+                    path.mkdir(parents=True, exist_ok=True)
+                path = Path(value)
+                if not path.is_dir():
+                    raise ValueError(f"The provided path for '{key}' is not a valid directory: {value}")
             data[key] = value
 
         json_string = json.dumps(data)
-        config = Config(json_string=json_string)
+        config = Config(config_source=json_string)
         return config
 
     @staticmethod
@@ -159,3 +166,13 @@ class Config:
             print(f"Configuration saved to {file_path}")
         except Exception as e:
             raise RuntimeError(f"Failed to save configuration: {str(e)}") from e
+        
+        
+    def is_empty(self):
+        """
+        Check if the configuration is empty.
+
+        Returns:
+            bool: True if the configuration is empty, False otherwise.
+        """
+        return not bool(self.data)

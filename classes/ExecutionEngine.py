@@ -5,6 +5,9 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from classes.Database import Database      
+from classes.Config import Config
+from classes.Task import Task  
 
 
 class ExecutionEngine:
@@ -13,78 +16,33 @@ class ExecutionEngine:
     Uses a configuration file to locate executables and set default parameters.
     """
 
-    def __init__(self, config_path):
+    def __init__(self, config: Config):
         """
-        Initialize the execution engine.
+        Initialize the execution engine with the provided configuration.
 
         Parameters:
-            config_path (str): Path to the configuration JSON file.
+            config (dict): A dictionary containing configuration details such as paths to executables,
+                   directories, and other necessary settings.
 
         Raises:
-            FileNotFoundError: If config or database file doesn't exist
-            KeyError: If required config keys are missing
-            json.JSONDecodeError: If config or database file is malformed
+            ValueError: If the configuration is missing required fields or the database directory is invalid.
+            Exception: If any other error occurs during initialization.
         """
         self.logger = logging.getLogger(__name__)
         
         try:
-            # Load configuration
-            with open(config_path, 'r') as config_file:
-                self.config = json.load(config_file)
+            # Use provided configuration
+            self.config = config
+            self.database = Database(config)
             
-            # Validate required config keys
-            required_keys = ['Database_directory', 'Rscript_exe', 'GAMS_exe', 'Pandoc_dir']
-            for key in required_keys:
-                if key not in self.config:
-                    raise KeyError(f"Missing required config key: {key}")
+            self.logger.info("Initialized ExecutionEngine with provided database instance.")
 
-            # Load flow database from configured Database_directory
-            db_path = Path(self.config["Database_directory"]) / "model_flow.db.json"
-            if not db_path.exists():
-                raise FileNotFoundError(f"Model flow database not found: {db_path}")
-            
-            with open(db_path, 'r') as db_file:
-                self.flow_db = json.load(db_file)
-                
-            self.logger.info(f"Initialized ExecutionEngine with database at {db_path}")
-
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in config file: {config_path}")
-            raise
         except Exception as e:
             self.logger.error(f"Failed to initialize ExecutionEngine: {str(e)}")
             raise
 
-    def find_task(self, module, task_name):
-        """
-        Find task metadata by module and task name.
-
-        Parameters:
-            module (str): The module name.
-            task_name (str): The task name.
-
-        Returns:
-            dict: The metadata of the task.
-
-        Raises:
-            ValueError: If the task or module is not found.
-        """
-        try:
-            if module not in self.flow_db:
-                raise ValueError(f"Module '{module}' not found in flow database.")
-
-            for task in self.flow_db[module]:
-                if task.get("name") == task_name:
-                    return task
-
-            raise ValueError(f"Task '{task_name}' not found in module '{module}'.")
-
-        except Exception as e:
-            self.logger.error(f"Task lookup failed: {str(e)}")
-            raise
-
-    def execute_task(self, module: str, task_name: str, output_dir: Optional[str] = None, 
-               task_metadata: Optional[dict] = None) -> int:
+    
+    def execute_task(self, module: str, task_name: str, output_dir: Optional[str] = None) -> int:
         """
         Execute the given task based on its metadata.
 
@@ -92,7 +50,6 @@ class ExecutionEngine:
             module (str): The module name.
             task_name (str): The task name.
             output_dir (str, optional): Directory for output files. Defaults to config's Temporary_directory.
-            task_metadata: Optional pre-loaded task metadata (avoids DB lookup)
 
         Returns:
             int: The return code of the executed process.
@@ -102,30 +59,23 @@ class ExecutionEngine:
             RuntimeError: If execution fails
         """
         try:
-            # Use provided metadata or look it up
-            task_meta = task_metadata if task_metadata else self.find_task(module, task_name)
+            task = self.database.get_task(module, task_name)
+
             self.logger.info(f"Executing task: {module}/{task_name}")
 
-            # Validate required fields
-            if not all(key in task_metadata for key in ['file_path', 'filetype']):
-                raise ValueError(f"Task metadata missing required fields: {task_metadata}")
-
-            filetype = task_metadata['filetype'].lower()
-            task_file = Path(task_metadata['file_path'])
-
-            if not task_file.exists():
-                raise FileNotFoundError(f"Task file not found: {task_file}")
+            filetype = task['filetype'].lower()
+            task_file = Path(task['file_path'])
 
             # Determine output directory (parameter > config > None)
             final_output_dir = output_dir or self.config.get("Temporary_directory")
             
             # Execute based on file type
             if filetype == ".r":
-                return self._execute_r_task(task_metadata)
+                return self._execute_r_task(task)
             elif filetype == ".rmd":
-                return self._execute_rmd_task(task_metadata, final_output_dir)  # Pass output_dir
+                return self._execute_rmd_task(task, final_output_dir)  # Pass output_dir
             elif filetype == ".gms":
-                return self._execute_gams_task(task_metadata)
+                return self._execute_gams_task(task)
             else:
                 raise ValueError(f"Unsupported file type: {filetype}")
 
@@ -134,18 +84,19 @@ class ExecutionEngine:
             raise RuntimeError(f"Failed to execute task {module}/{task_name}: {str(e)}") from e
     
     
-    def _execute_r_task(self, task_metadata):
+    def _execute_r_task(self, task: Task):
         """Execute an R script task."""
+        
         try:
-            rscript_path = Path(self.config["Rscript_exe"])
-            task_file = Path(task_metadata["file_path"])
-            
+            rscript_path = Path(self.config.get("Rscript_exe"))
+            task_file = Path(task["file_path"])
+
             # Convert Windows paths to R-friendly format
             def r_path(path):
                 return str(path).replace('\\', '/')
             
             args_list = []
-            for param in task_metadata.get("config", []):
+            for param in task.get("config", []):
                 if all(k in param for k in ['script_name', 'script_value']):
                     # Escape backslashes in parameter values too
                     value = str(param['script_value']).replace('\\', '/')
@@ -155,19 +106,18 @@ class ExecutionEngine:
             self.logger.info(f"Executing R script: {' '.join(command)}")
             
             return subprocess.call(command)
-            
+        
         except Exception as e:
             self.logger.error(f"R task execution failed: {str(e)}")
             raise
 
-    def _execute_rmd_task(self, task_metadata, output_dir=None):
+    def _execute_rmd_task(self, task: Task, output_dir=None):
         """Execute an R Markdown task with output directory support and strict type handling."""
         try:
             # Get required paths from config
-            rscript_path = Path(self.config["Rscript_exe"])
-            pandoc_dir = Path(self.config["Pandoc_dir"])
-            gams_dir = Path(self.config["GAMS_path"])
-            task_file = Path(task_metadata["file_path"])
+            rscript_path = Path(self.config.get("Rscript_exe"))
+            pandoc_dir = Path(self.config.get("Pandoc_dir"))
+            task_file = Path(task["file_path"])
 
             # Set output directory (default to config's Temporary_directory or current dir)
             output_dir = Path(output_dir or self.config.get("Temporary_directory", "."))
@@ -177,7 +127,7 @@ class ExecutionEngine:
                 raise NotADirectoryError(f"Path is not a directory: {output_dir}")
 
             # Generate output filename
-            task_name = task_metadata.get('name', 'output').replace(' ', '_')
+            task_name = task.get('name', 'output').replace(' ', '_')
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
             output_file = output_dir / f"{task_name}_{timestamp}.html"
 
@@ -212,7 +162,7 @@ class ExecutionEngine:
             
             # Prepare parameters with type handling
             params_list = []
-            for param in task_metadata.get("config", []):
+            for param in task.get("config", []):
                 if all(k in param for k in ['script_name', 'script_value']):
                     params_list.append(f"{param['script_name']}={format_param_value(param)}")
 
@@ -241,14 +191,14 @@ class ExecutionEngine:
             self.logger.error(f"R Markdown execution failed: {str(e)}")
             raise
 
-    def _execute_gams_task(self, task_metadata):
+    def _execute_gams_task(self, task: Task):
         """Execute a GAMS task."""
         try:
-            gams_exe = Path(self.config["GAMS_exe"])
-            task_file = Path(task_metadata["file_path"])
+            gams_exe = Path(self.config.get("GAMS_exe"))
+            task_file = Path(task["file_path"])
 
             args_list = []
-            for param in task_metadata.get("config", []):
+            for param in task.get("config", []):
                 if all(k in param for k in ['script_name', 'script_value']):
                     args_list.append(f"{param['script_name']}={param['script_value']}")
 

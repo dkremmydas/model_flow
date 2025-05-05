@@ -41,8 +41,12 @@ def build(config: Config) -> None:
         PermissionError: If write access is denied
     """
     try:
+        print(config.get("Code_directory"))
+        
         code_dir = Path(config.get("Code_directory"))
         db_dir = Path(config.get("Database_directory"))
+        
+        
         
         if not code_dir.exists():
             raise FileNotFoundError(f"Code directory not found: {code_dir}")
@@ -69,28 +73,25 @@ def build(config: Config) -> None:
         raise
 
 
-def list_tasks(config_path: str, module_filter: Optional[str] = None) -> None:
+def list_tasks(config: Config, module_filter: Optional[str] = None) -> None:
     """
     List all available tasks from the database in a clean tree format
     
     Args:
-        config_path: Path to the configuration file
+        config: Config instance containing configuration details
         module_filter: Optional module name to filter tasks
         
     Raises:
-        FileNotFoundError: If config or database file doesn't exist
-        json.JSONDecodeError: If config or database file is malformed
-        KeyError: If required config keys are missing
+        FileNotFoundError: If database file doesn't exist
+        json.JSONDecodeError: If database file is malformed
     """
     try:
-        # Load and validate configuration
-        with open(config_path, 'r') as config_file:
-            config = json.load(config_file)
-        
-        db_path = Path(config["Database_directory"]) / "model_flow.db.json"
+        # Locate database file
+        db_path = Path(config.get("Database_directory")) / "model_flow.db.json"
         if not db_path.exists():
             raise FileNotFoundError(f"Database file not found at {db_path}. Run 'build' command first.")
         
+        # Load database
         with open(db_path, 'r', encoding='utf-8') as f:
             modules = json.load(f)
         
@@ -102,7 +103,7 @@ def list_tasks(config_path: str, module_filter: Optional[str] = None) -> None:
                 return
         
         # Clean output formatting
-        print("\n┌────────────────────────────────────────┐")
+        print("\n┌─────────────────────────────────────────┐")
         print("│        MODEL FLOW TASK DIRECTORY        │")
         print("└─────────────────────────────────────────┘")
         
@@ -126,9 +127,10 @@ def list_tasks(config_path: str, module_filter: Optional[str] = None) -> None:
     except Exception as e:
         logger.error(f"Failed to list tasks: {str(e)}")
         raise
-
+    
+    
 def run_task(config: Config, module: str, task_name: str, parallel: bool = False, 
-             output_dir: Optional[str] = None, parameters: Optional[dict] = None) -> int:
+                     output_dir: Optional[str] = None, parameters: Optional[dict] = None) -> int:
     """
     Execute a specific task by finding it in the database and running it
     
@@ -149,61 +151,7 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
         RuntimeError: If execution fails
     """
     try:
-        # Get database path from config
-        try:
-            db_dir = Path(config.get("Database_directory"))
-            db_path = db_dir / "model_flow.db.json"
-        except KeyError:
-            logger.error("Missing 'Database_directory' in config")
-            raise
-
-        # Verify database exists
-        if not db_path.exists():
-            logger.error(f"Database file not found at {db_path}. Run 'build' command first.")
-            raise FileNotFoundError(f"Database file not found: {db_path}")
-
-        # Load task database
-        try:
-            with open(db_path, 'r', encoding='utf-8') as db_file:
-                task_db = json.load(db_file)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in database file: {db_path}")
-            raise
-
-        # Find the requested task
-        if module not in task_db:
-            raise ValueError(f"Module '{module}' not found in database.")
-            
-        task_found = None
-        for task in task_db[module]:
-            if task.get("name") == task_name:
-                task_found = task
-                break
-        
-        if not task_found:
-            raise ValueError(f"Task '{task_name}' not found in module '{module}'.")
-        
-        # Merge command line parameters with task config
-        if parameters:
-            if 'config' not in task_found:
-                task_found['config'] = []
-            for param_name, param_value in parameters.items():
-                # Update if parameter exists, otherwise add new
-                param_exists = False
-                for param in task_found['config']:
-                    if param['script_name'] == param_name:
-                        param['script_value'] = param_value
-                        param_exists = True
-                        break
-                if not param_exists:
-                    task_found['config'].append({
-                        'script_name': param_name,
-                        'script_value': param_value
-                    })
-        
-        logger.info(f"Found task: {module}/{task_name}")
-        logger.debug(f"Task details: {json.dumps(task_found, indent=2)}")       
-        
+               
         # Create execution engine with Config instance
         engine = ExecutionEngine(config)
 
@@ -216,7 +164,7 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
                 future = executor.submit(engine.execute_task, module, task_name, final_output_dir)
                 result = future.result()
         else:
-            result = engine.execute_task(module, task_name, final_output_dir, task_metadata=task_found)
+            result = engine.execute_task(module, task_name, final_output_dir)
         
         logger.info(f"Task '{module}/{task_name}' completed with exit code: {result}")
         return result
@@ -240,26 +188,22 @@ def run_pipeline(config: str, module: str, pipeline: str) -> None:
     raise NotImplementedError("Pipeline execution not yet implemented")
 
 
-def show_task(config_path: str, module: str, task_name: str) -> None:
+def show_task(config: Config, module: str, task_name: str) -> None:
     """
     Display detailed information about a specific task from the database
     
     Args:
-        config_path: Path to the configuration file
+        config: Config instance containing configuration details
         module: Module name containing the task
         task_name: Name of task to display
         
     Raises:
-        FileNotFoundError: If config or database file doesn't exist
+        FileNotFoundError: If database file doesn't exist
         ValueError: If module/task not found
     """
     try:
-        # Load configuration
-        with open(config_path, 'r') as config_file:
-            config = json.load(config_file)
-        
         # Locate database file
-        db_path = Path(config["Database_directory"]) / "model_flow.db.json"
+        db_path = Path(config.get("Database_directory")) / "model_flow.db.json"
         if not db_path.exists():
             raise FileNotFoundError(f"Database file not found at {db_path}. Run 'build' command first.")
         
@@ -316,8 +260,6 @@ def init():
 
     # Create a new Config instance by asking the user for input
     config = Config.create_from_user_input()
-    
-    print(config)
 
     # Get the Database_directory from the user-provided configuration
     database_directory = config.get("Database_directory")
@@ -501,16 +443,27 @@ def main():
         print("\nFor detailed help on each command, use: python model_flow.py <command> --help")
         sys.exit(0)
     
+    # Check if the config file exists before proceeding
+    if args.command in ['build', 'run_task', 'run_pipeline', 'list_tasks', 'show_task', 'run_gui']:
+        
+        config = Config(args.config)  # Load the config file
+        
+        if config.is_empty():
+            logger.error(f"Problem with loading configuration file: {args.config}")
+            sys.exit(1)
+            
+        
+    
     try:
         if args.command == 'init':
             init()
         elif args.command == 'build':
-            build(Config(args.config))
+            build(config)
         elif args.command == 'run_task':
             # Convert --set parameters to dict
             params = dict(args.set) if args.set else None
             run_task(
-                args.config,
+                config,
                 args.module,
                 args.task,
                 args.parallel,
@@ -518,11 +471,11 @@ def main():
                 parameters=params  # Pass the --set parameters here
             )
         elif args.command == 'run_pipeline':
-            run_pipeline(args.config, args.module, args.pipeline)
+            run_pipeline(config, args.module, args.pipeline)
         elif args.command == 'list_tasks':
-            list_tasks(args.config, args.module)
+            list_tasks(config, args.module)
         elif args.command == 'show_task':  # New command
-            show_task(args.config, args.module, args.task)
+            show_task(config, args.module, args.task)
         elif args.command == 'run_gui':  # New run_gui command
             # Launch the Textual GUI
             app = ModelFlowApp()
