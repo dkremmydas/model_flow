@@ -17,6 +17,8 @@ class ModelFlowApp(App):
         self.database = Database(config)
         self.modules = self.database.list_modules()  # Load the list of modules from the database
         self.module_tasks = {module: self.database.list_module_tasks(module) for module in self.modules}
+        print(self.modules)
+        print(self.module_tasks)
         
 
     def compose(self) -> ComposeResult:
