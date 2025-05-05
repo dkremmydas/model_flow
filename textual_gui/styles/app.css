@@ -1,0 +1,63 @@
+/* General App Styling */
+Screen {
+    background: black;
+    color: white;
+}
+
+/* Header Styling (Row 1) */
+#header {
+    background: darkblue;
+    color: white;
+    text-align: center;
+    height: 1;
+    padding: 1;
+    border-bottom: solid white;
+}
+
+/* Module Selector Styling (Row 2) */
+#module-row {
+    background: gray;
+    height: 3;
+    padding: 1;
+    border-bottom: solid white;
+}
+
+#module-label {
+    padding: 0 1;
+    color: white;
+}
+
+#module-selector {
+    background: white;
+    color: black;
+    border: solid gray;
+}
+
+/* Main Content Styling (Row 3) */
+#main-content {
+    height: 90%;
+    border-top: solid white;
+    border-bottom: solid white;
+}
+
+#tree-view {
+    background: #1e1e1e;
+    color: lightgreen;
+    border-right: solid white;
+    padding: 1;
+}
+
+#output-view {
+    background: #2e2e2e;
+    color: lightgray;
+    padding: 1;
+}
+
+/* Footer Styling (Row 4) */
+Footer {
+    background: darkblue;
+    color: white;
+    height: 2;
+    text-align: center;
+    border-top: solid white;
+}

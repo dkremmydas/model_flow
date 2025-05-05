@@ -478,7 +478,7 @@ def main():
             show_task(config, args.module, args.task)
         elif args.command == 'run_gui':  # New run_gui command
             # Launch the Textual GUI
-            app = ModelFlowApp()
+            app = ModelFlowApp(config)
             app.run()
         else:
             parser.print_help()

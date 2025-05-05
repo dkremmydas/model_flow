@@ -50,6 +50,28 @@ class Database:
         except Exception as e:
             raise RuntimeError(f"Failed to save database: {str(e)}") from e
 
+
+    def list_module_tasks(self, module_name: str) -> List[Dict]:
+        """
+        Return a list of tasks for a specific module.
+
+        Parameters:
+            module_name (str): The name of the module.
+
+        Returns:
+            List[Dict]: A list of tasks in the module, or an empty list if the module doesn't exist.
+        """
+        return self.get_module(module_name) or []
+
+    def list_modules(self) -> List[str]:
+        """
+        Return a list of all module names in the database.
+
+        Returns:
+            List[str]: A list of module names.
+        """
+        return list(self.data.keys())
+
     def get_module(self, module_name: str) -> Optional[List[Dict]]:
         """
         Get all tasks for a specific module.

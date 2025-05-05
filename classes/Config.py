@@ -95,7 +95,7 @@ class Config:
 
     def get(self, key: str, default=None):
         """
-        Get a configuration value.
+        Get a configuration value in a case-insensitive manner.
 
         Parameters:
             key (str): The key to retrieve.
@@ -104,7 +104,9 @@ class Config:
         Returns:
             The value associated with the key, or the default value if the key is not found.
         """
-        return self.data.get(key, default)
+        key_lower = key.lower()
+        data_lower = {k.lower(): v for k, v in self.data.items()}
+        return data_lower.get(key_lower, default)
 
     def __str__(self):
         """
