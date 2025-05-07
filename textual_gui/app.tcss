@@ -6,20 +6,30 @@ Screen {
 
 /* Header Styling (Row 1) */
 #header {
-    background: darkblue;
+    background: black;
     color: white;
     text-align: center;
     height: 1;
-    padding: 1;
-    border-bottom: solid white;
+    padding: 0;
+    border-bottom: none;
+}
+
+/* Module Selector Styling (Row 2) */
+#header-row {
+    color: white;
+    height: 2;
+    padding: 0;
+    border-bottom: none;
+    text-align: center;
 }
 
 /* Module Selector Styling (Row 2) */
 #module-row {
     background: gray;
-    height: 3;
-    padding: 1;
-    border-bottom: solid white;
+    color: white;
+    height: 2;
+    padding: 0;
+    border-bottom: none;
 }
 
 #module-label {
@@ -55,9 +65,10 @@ Screen {
 
 /* Footer Styling (Row 4) */
 Footer {
-    background: darkblue;
+    background: darkgray;
     color: white;
-    height: 2;
+    height: 1;
+    padding: 0;
     text-align: center;
     border-top: solid white;
 }

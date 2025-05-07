@@ -8,36 +8,36 @@ from classes.Database import Database
 class ModelFlowApp(App):
     """A Textual-based GUI for the Model Flow application."""
 
-    CSS_PATH = "styles/app.css"  # Optional: Define a CSS file for styling
+    CSS_PATH = "app.tcss"  # Optional: Define a CSS file for styling
 
     def __init__(self, config=None) -> None:
         """Initialize the application."""
         super().__init__()
         self.config = config  # Store the configuration if needed
         self.database = Database(config)
-        self.modules = self.database.list_modules()  # Load the list of modules from the database
+        self.modules = self.database.list_modules() or ["No modules available"]  # Load the list of modules or provide a fallback
         self.module_tasks = {module: self.database.list_module_tasks(module) for module in self.modules}
-        print(self.modules)
-        print(self.module_tasks)
         
 
     def compose(self) -> ComposeResult:
         """Compose the layout of the application."""
+        
         # Row 1: Static text
         yield Horizontal(
            Static(
             f"Model Flow Application. Config file from {self.config.get('database_directory', 'Not specified')}",
             id="header-row"
-            )
+            ),
+            id="header"
         )
-
 
         # Row 2: Module selector
         yield Horizontal(
             Static("Select Module:", id="module-label"),
             Select(
-            options=[(module, module) for module in self.modules],
-            id="module-selector",
+                options=[(module, module) for module in self.modules],
+                value=self.modules[0],  # Set the default selected value
+                id="module-selector",
             ),
             id="module-row",
         )
