@@ -62,7 +62,7 @@ class Database:
             List[Dict]: A list of tasks in the module, or an empty list if the module doesn't exist.
         """
         module_tasks = self.get_module(module_name) or []
-        return [f"{task['name']} ({task['file']})" for task in module_tasks]
+        return [f"{task['name']}" for task in module_tasks]
 
     def list_modules(self) -> List[str]:
         """

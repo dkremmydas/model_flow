@@ -3,10 +3,14 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Static, Tree, Log, Select, Footer, Header, Input
 from textual.widget import Widget
 from textual.widgets import DataTable
+from textual.widgets.tree import TreeNode
+
+from rich.text import Text
 
 from classes.Config import Config
 from classes.Database import Database
 from classes.Task import Task
+import sys
 
 
 
@@ -36,9 +40,10 @@ class SelectTask(Widget):
     """
     
     
-    def __init__(self, database: Database) -> None:
+    def __init__(self,  modelflowapp: "ModelFlowApp"):
         super().__init__(id= "select-task")
-        self.database = database
+        self.modelflowapp = modelflowapp
+        self.database = modelflowapp.database
         self.modules = self.database.list_modules() or ["No modules available"]  # Load the list of modules or provide a fallback
         self.module_tasks = {module: self.database.list_module_tasks(module) for module in self.modules}         
         self.tree = Tree("Modules and Tasks", id="tree-view")
@@ -63,7 +68,7 @@ class SelectTask(Widget):
             module_node = root.add(module)
             for task in tasks:
                 module_node.add(task)
-            module_node.expand()
+            #module_node.expand()
         root.expand()
 
     # def on_select_changed(self, event: Select.Changed) -> None:
@@ -75,9 +80,8 @@ class SelectTask(Widget):
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Handle tree node selection."""
         selected_node = event.node
-        output_view = super.query_one("task-log", Log)
-        output_view.write(f"Selected task: {selected_node.label}")
-        
+        self.modelflowapp.show_task(selected_node)  # Call the method in ModelFlowApp to update the task
+       
 
 
 
@@ -103,20 +107,57 @@ class ShowTask(Widget):
     def compose(self) -> ComposeResult:
         """Compose the layout of the application."""
         with Vertical():
-            yield Log(id="task-log")  # Replace TextLog with Log
-        
-    
-    def set_task(self, task: Task) -> None:
-        """Update the task when it changes."""
-        if task:
-            # Update the task and print its details to the task-log
-            self.task = task
-            task_log = self.query_one("#task-log", Log)
-            task_log.clear()  # Clear previous task details
-            task.print(task_log.write)
-            pass        
+            yield Tree("Select a task",id="task-log") 
             
+    def show_task(self, task: Task) -> None:
+        """Update the task in the ShowTask widget."""
+        self.task = task
+        self.query_one("#task-log", Tree).clear()
+        self.add_json(self.query_one("#task-log", Tree).root, task)
         
+    @classmethod
+    def add_json(cls, node: TreeNode, json_data: object) -> None:
+        """Adds JSON data to a node.
+
+        Args:
+            node (TreeNode): A Tree node.
+            json_data (object): An object decoded from JSON.
+        """
+
+        from rich.highlighter import ReprHighlighter
+
+        highlighter = ReprHighlighter()
+
+        def add_node(name: str, node: TreeNode, data: object) -> None:
+            """Adds a node to the tree.
+
+            Args:
+                name (str): Name of the node.
+                node (TreeNode): Parent node.
+                data (object): Data associated with the node.
+            """
+            if isinstance(data, dict):
+                node.set_label(Text(f"{{}} {name}"))
+                for key, value in data.items():
+                    new_node = node.add("")
+                    add_node(key, new_node, value)
+            elif isinstance(data, list):
+                node.set_label(Text(f"[] {name}"))
+                for index, value in enumerate(data):
+                    new_node = node.add("")
+                    add_node(str(index), new_node, value)
+            else:
+                node.allow_expand = False
+                if name:
+                    label = Text.assemble(
+                        Text.from_markup(f"[b]{name}[/b]="), highlighter(repr(data))
+                    )
+                else:
+                    label = Text(repr(data))
+                node.set_label(label)
+
+        add_node("", node, json_data) 
+          
 
 
 
@@ -146,12 +187,14 @@ class ModelFlowApp(App):
     BINDINGS = [
         ("escape", "quit", "Quit")
     ]
+    
 
 
     def __init__(self, config: Config = None) -> None:
         """Initialize the application."""
         super().__init__()
         self.config = config  # Store the configuration if needed    
+        self.database = Database(self.config)  # Initialize the database
         self.title = f"Model Flow - Database Directory: {self.config.get("database_directory", "Not specified")}"
         
 
@@ -161,11 +204,24 @@ class ModelFlowApp(App):
         # Row 1: Static text
         yield Header()
         yield Horizontal(
-            SelectTask(Database(self.config)),          
+            SelectTask(self),          
             ShowTask(None),
             id="container"
         )     
         yield Footer()
+        
+    def show_task(self, node) -> None:
+        """Update the task in the ShowTask widget."""
+        task_name = str(node.label)
+        module_name = None if str(node.parent.label) == 'Modules and Tasks' else str(node.parent.label)
+        log = self.query_one("#show-task", ShowTask)
+
+        if module_name:
+            task = self.database.get_task(module_name, task_name)
+            log.show_task(task)
+            
+     
+    
 
 
 
