@@ -88,7 +88,7 @@ class SelectTask(Widget):
 
 class ShowTask(Widget):
     
-    task = None  # Reactive attribute to hold the selected task
+    tree = Tree("Select a task",id="task-log") 
     
     DEFAULT_CSS = """
     ShowTask {
@@ -107,16 +107,16 @@ class ShowTask(Widget):
     def compose(self) -> ComposeResult:
         """Compose the layout of the application."""
         with Vertical():
-            yield Tree("Select a task",id="task-log") 
+            yield self.tree
             
     def show_task(self, task: Task) -> None:
         """Update the task in the ShowTask widget."""
-        self.task = task
-        self.query_one("#task-log", Tree).clear()
-        self.add_json(self.query_one("#task-log", Tree).root, task)
+        self.tree.clear()        
+        self.add_json(Text(f"{task['module']}/{task['name']}"),self.tree.root, task)
+        #self.tree.label = "LALAL" #Text(f"{task['module']}/{task['name']}")
         
     @classmethod
-    def add_json(cls, node: TreeNode, json_data: object) -> None:
+    def add_json(cls, root_name, node: TreeNode, json_data: object) -> None:
         """Adds JSON data to a node.
 
         Args:
@@ -156,7 +156,7 @@ class ShowTask(Widget):
                     label = Text(repr(data))
                 node.set_label(label)
 
-        add_node("", node, json_data) 
+        add_node(root_name, node, json_data) 
           
 
 

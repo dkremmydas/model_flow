@@ -91,6 +91,7 @@ class Parser:
 
                             module_name = task.module or 'Uncategorized'
                             module_data = {
+                                "module": module_name,
                                 "file": file,
                                 "file_path": str(file_path),
                                 "filetype": file_ext,
