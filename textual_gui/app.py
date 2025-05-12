@@ -10,7 +10,7 @@ from rich.text import Text
 from classes.Config import Config
 from classes.Database import Database
 from classes.Task import Task
-import sys
+import json
 
 
 
@@ -89,6 +89,7 @@ class SelectTask(Widget):
 class ShowTask(Widget):
     
     tree = Tree("Select a task",id="task-log") 
+    #log = Log(id="debug-log")
     
     DEFAULT_CSS = """
     ShowTask {
@@ -108,12 +109,25 @@ class ShowTask(Widget):
         """Compose the layout of the application."""
         with Vertical():
             yield self.tree
+            #yield self.log
             
     def show_task(self, task: Task) -> None:
         """Update the task in the ShowTask widget."""
         self.tree.clear()        
-        self.add_json(Text(f"{task['module']}/{task['name']}"),self.tree.root, task)
-        #self.tree.label = "LALAL" #Text(f"{task['module']}/{task['name']}")
+        #self.log.write_line(json.dumps(task, indent=2))
+        
+        # Convert the task object to a dictionary, excluding 'configarray'
+        task_new = task.copy()
+        del(task_new["config"])
+        del(task_new["description"])
+        del(task_new["module"])
+        del(task_new["name"])
+        config_dict = {item["name"]: {k: v for k, v in item.items() if k != "name"} for item in task["config"]}
+        task_new["config"] = config_dict
+        #self.log.write_line(json.dumps(config_dict, indent=2))
+
+        self.add_json(Text(f"{task.get('module', '')}/{task.get('name', '')}"), self.tree.root, task_new)
+
         
     @classmethod
     def add_json(cls, root_name, node: TreeNode, json_data: object) -> None:

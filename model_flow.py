@@ -234,8 +234,6 @@ def show_task(config: Config, module: str, task_name: str) -> None:
             print("\nDescription:")
             print(task_found['description'])
         
-        if 'previous' in task_found and task_found['previous']:
-            print(f"\nPrevious Task: {task_found['previous']}")
         
         if 'config' in task_found and task_found['config']:
             print("\nConfiguration Parameters:")

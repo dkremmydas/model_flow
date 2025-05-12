@@ -176,7 +176,6 @@ Defines that the source file corresponds to a Task
 - Explicit attributes:
   - name: the name of the task
   - module: the module it belongs to. It should have a folder like structure. For example "v.main2020/p.scenar2020" or "d.fadn".
-  - previous: the task that precedes it
 - Implicit attributes
 
 ### @MODELFLOW_description_start ... @MODELFLOW_description_end

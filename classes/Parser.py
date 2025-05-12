@@ -96,7 +96,6 @@ class Parser:
                                 "file_path": str(file_path),
                                 "filetype": file_ext,
                                 "name": task.name,
-                                "previous": task.previous,
                                 "description": task.description.strip(),
                                 "config": task.config,
                             }

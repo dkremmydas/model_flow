@@ -22,7 +22,6 @@ class Task:
         # Task-specific attributes
         self.name = False
         self.module = False
-        self.previous = False
         self.description = ""
         self.config = []
 
@@ -78,7 +77,6 @@ class Task:
                     task_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
                     self.name = task_attributes.get("name", False)
                     self.module = task_attributes.get("module", False)
-                    self.previous = task_attributes.get("previous", False)
 
                 elif key == "config":
                     config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
@@ -88,11 +86,11 @@ class Task:
                         next_line = lines[line_number].strip()
 
                         # Match assignment in GAMS syntax
-                        default_match = re.match(r'^\s*(\w+)\s*=\s*(.*?);$', next_line)
+                        default_match = re.match(r'^\$\s*SET\s+(\w+)\s+(.*?)\s*$', next_line, re.IGNORECASE)
 
                         if default_match:
                             config_attributes['script_name'] = default_match.group(1).strip()
-                            config_attributes['script_value'] = default_match.group(2).strip()
+                            config_attributes['script_value'] = default_match.group(2).strip().replace('"', '')
 
                     self.config.append(config_attributes)
 
@@ -138,7 +136,6 @@ class Task:
                     task_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
                     self.name = task_attributes.get("name", False)  # Default to False if "name" is not found
                     self.module = task_attributes.get("module", False)  # Default to False if "module" is not found
-                    self.previous = task_attributes.get("previous", False)  # Default to False if "previous" is not found
 
                 elif key == "config":
                     config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
