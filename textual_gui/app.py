@@ -17,6 +17,7 @@ import json
 class SelectTask(Widget):    
     
     tree = None  # Reactive attribute to hold the tree widget
+    selected_node = None
     
     DEFAULT_CSS = """
     SelectTask {
@@ -79,8 +80,8 @@ class SelectTask(Widget):
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Handle tree node selection."""
-        selected_node = event.node
-        self.modelflowapp.show_task(selected_node)  # Call the method in ModelFlowApp to update the task
+        self.selected_node = event.node
+        self.modelflowapp.show_task(self.selected_node)  # Call the method in ModelFlowApp to update the task
        
 
 
@@ -89,7 +90,8 @@ class SelectTask(Widget):
 class ShowTask(Widget):
     
     tree = Tree("Select a task",id="task-log") 
-    #log = Log(id="debug-log")
+    log = Log(id="description")
+    log.auto_scroll = False
     
     DEFAULT_CSS = """
     ShowTask {
@@ -98,6 +100,11 @@ class ShowTask(Widget):
         border: solid red;
         margin: 1;
         padding: 1;
+    }
+    
+    #description {   
+        height: 40%;
+        width: 100%;
     }
     """
     
@@ -109,14 +116,13 @@ class ShowTask(Widget):
         """Compose the layout of the application."""
         with Vertical():
             yield self.tree
-            #yield self.log
+            yield self.log
             
     def show_task(self, task: Task) -> None:
-        """Update the task in the ShowTask widget."""
-        self.tree.clear()        
-        #self.log.write_line(json.dumps(task, indent=2))
+        """Update the task in the ShowTask widget."""  
         
-        # Convert the task object to a dictionary, excluding 'configarray'
+        # Show the parameters
+        self.tree.clear()  
         task_new = task.copy()
         del(task_new["config"])
         del(task_new["description"])
@@ -124,7 +130,11 @@ class ShowTask(Widget):
         del(task_new["name"])
         config_dict = {item["name"]: {k: v for k, v in item.items() if k != "name"} for item in task["config"]}
         task_new["config"] = config_dict
-        #self.log.write_line(json.dumps(config_dict, indent=2))
+        
+        #Show the description
+        self.log.clear()
+        self.log.write_line(task["description"])
+        self.log.scroll_home(animate=False)
 
         self.add_json(Text(f"{task.get('module', '')}/{task.get('name', '')}"), self.tree.root, task_new)
 
