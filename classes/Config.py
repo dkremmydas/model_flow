@@ -78,7 +78,7 @@ class Config:
         try:
             self.validate_required_keys()
         except ValueError as e:
-            classes.Logger.error(f"Validation error: {e}")
+            self.logger.error(f"Validation error: {e}")
             self.data = None
     
         

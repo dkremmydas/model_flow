@@ -117,6 +117,7 @@ class ExecutionEngine:
             # Get required paths from config
             rscript_path = Path(self.config.get("Rscript_exe"))
             pandoc_dir = Path(self.config.get("Pandoc_dir"))
+            gams_dir = Path(self.config.get("GAMS_exe")).parent
             task_file = Path(task["file_path"])
 
             # Set output directory (default to config's Temporary_directory or current dir)
