@@ -1,13 +1,13 @@
+import json
+
 import pytest
 
 from classes import ExecutionEngine as execution_engine_module
 from classes.Config import Config
-from classes.ExecutionEngine import ExecutionEngine
+from classes.ExecutionEngine import ExecutionEngine, ExecutionResult
 
 
-@pytest.fixture
-def engine(tmp_path):
-    (tmp_path / "model_flow.db.json").write_text("{}", encoding="utf-8")
+def make_config(tmp_path) -> Config:
     config_data = {
         "Code_directory": str(tmp_path),
         "Database_directory": str(tmp_path),
@@ -16,10 +16,40 @@ def engine(tmp_path):
         "GAMS_exe": "C:/GAMS/gams.exe",
         "Pandoc_dir": "C:/Pandoc",
     }
-    import json
+    return Config(json.dumps(config_data))
 
-    config = Config(json.dumps(config_data))
-    return ExecutionEngine(config)
+
+@pytest.fixture
+def engine(tmp_path):
+    (tmp_path / "model_flow.db.json").write_text("{}", encoding="utf-8")
+    return ExecutionEngine(make_config(tmp_path))
+
+
+@pytest.fixture
+def engine_with_task(tmp_path):
+    db_content = {
+        "test_module": [
+            {
+                "module": "test_module",
+                "file": "script.R",
+                "file_path": "C:\\scripts\\test_script.R",
+                "filetype": ".r",
+                "name": "1_test_task",
+                "description": "",
+                "config": [
+                    {
+                        "name": "ext_par",
+                        "role": "parameter",
+                        "type": "number",
+                        "script_name": "ext_par",
+                        "script_value": "5",
+                    }
+                ],
+            }
+        ]
+    }
+    (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+    return ExecutionEngine(make_config(tmp_path))
 
 
 @pytest.fixture
@@ -31,6 +61,20 @@ def fake_call(monkeypatch):
         return 0
 
     monkeypatch.setattr(execution_engine_module.subprocess, "call", _fake_call)
+    return calls
+
+
+@pytest.fixture
+def fake_run(monkeypatch):
+    import subprocess as std_subprocess
+
+    calls = []
+
+    def _fake_run(command, capture_output=True, text=True):
+        calls.append(command)
+        return std_subprocess.CompletedProcess(command, returncode=0, stdout="hello output", stderr="")
+
+    monkeypatch.setattr(execution_engine_module.subprocess, "run", _fake_run)
     return calls
 
 
@@ -81,3 +125,34 @@ def test_execute_rmd_task_sets_gams_dir_on_path(engine, fake_call, tmp_path):
     assert "paste('C:/GAMS'" in render_script
     assert "rmarkdown::render(" in render_script
     assert "input = 'C:/scripts/test_script.rmd'" in render_script
+
+
+def test_execute_task_applies_overrides_without_mutating_database(engine_with_task, fake_call):
+    result = engine_with_task.execute_task("test_module", "1_test_task", overrides={"ext_par": "99"})
+
+    assert result == 0
+    assert fake_call == [["C:\\R\\Rscript.exe", "C:/scripts/test_script.R", "ext_par=99"]]
+
+    original = engine_with_task.database.get_task("test_module", "1_test_task")
+    assert original["config"][0]["script_value"] == "5"
+
+
+def test_execute_task_without_overrides_uses_database_defaults(engine_with_task, fake_call):
+    result = engine_with_task.execute_task("test_module", "1_test_task")
+
+    assert result == 0
+    assert fake_call == [["C:\\R\\Rscript.exe", "C:/scripts/test_script.R", "ext_par=5"]]
+
+
+def test_execute_r_task_capture_output_returns_execution_result(engine, fake_run):
+    task = {
+        "file_path": "C:\\scripts\\test_script.R",
+        "config": [{"script_name": "ext_par", "script_value": "5"}],
+    }
+
+    result = engine._execute_r_task(task, capture_output=True)
+
+    assert isinstance(result, ExecutionResult)
+    assert result.returncode == 0
+    assert result.stdout == "hello output"
+    assert fake_run == [["C:\\R\\Rscript.exe", "C:/scripts/test_script.R", "ext_par=5"]]

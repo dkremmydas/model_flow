@@ -161,10 +161,10 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
         # Execute based on parallel flag
         if parallel:
             with ThreadPoolExecutor() as executor:
-                future = executor.submit(engine.execute_task, module, task_name, final_output_dir)
+                future = executor.submit(engine.execute_task, module, task_name, final_output_dir, parameters)
                 result = future.result()
         else:
-            result = engine.execute_task(module, task_name, final_output_dir)
+            result = engine.execute_task(module, task_name, final_output_dir, overrides=parameters)
         
         logger.info(f"Task '{module}/{task_name}' completed with exit code: {result}")
         return result
