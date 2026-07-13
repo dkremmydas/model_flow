@@ -91,3 +91,65 @@ def test_gams_task_name_module_and_config(tmp_path):
             "script_value": "15",
         }
     ]
+
+
+def test_bat_task_name_module_and_config(tmp_path):
+    content = (
+        '::@MODELFLOW_task name="install_deps" module="admin"\n'
+        '::@MODELFLOW_config name="target_dir" role="parameter" type="string"\n'
+        'SET "target_dir=C:\\tools"\n'
+    )
+    task = Task(str(write(tmp_path, "script.bat", content)))
+
+    assert task.name == "install_deps"
+    assert task.module == "admin"
+    assert task.config == [
+        {
+            "name": "target_dir",
+            "role": "parameter",
+            "type": "string",
+            "script_name": "target_dir",
+            "script_value": "C:\\tools",
+        }
+    ]
+
+
+def test_bat_task_config_rejects_unquoted_set_with_warning(tmp_path, capsys):
+    """Only the quoted SET "VAR=value" form is a valid parameter definition. An
+    unquoted "set VAR=value" must be rejected (warned about, not parsed) rather
+    than silently accepted."""
+    content = (
+        '::@MODELFLOW_task name="install_deps" module="admin"\n'
+        '::@MODELFLOW_config name="target_dir" role="parameter" type="string"\n'
+        "set target_dir=C:\\tools\n"
+    )
+    task = Task(str(write(tmp_path, "script.bat", content)))
+
+    assert task.config == []
+    assert "invalid" in capsys.readouterr().out.lower()
+
+
+def test_bat_task_config_rejects_if_not_defined_guard_with_warning(tmp_path, capsys):
+    """The if-not-defined guard form is not a valid parameter definition either --
+    only a bare quoted SET "VAR=value" is."""
+    content = (
+        '::@MODELFLOW_task name="install_deps" module="admin"\n'
+        '::@MODELFLOW_config name="target_dir" role="parameter" type="string"\n'
+        "if not defined target_dir set target_dir=C:\\tools\n"
+    )
+    task = Task(str(write(tmp_path, "script.bat", content)))
+
+    assert task.config == []
+    assert "invalid" in capsys.readouterr().out.lower()
+
+
+def test_bat_task_description_block(tmp_path):
+    content = (
+        '::@MODELFLOW_task name="install_deps" module="admin"\n'
+        "::@MODELFLOW_description_start\n"
+        ":: Installs required tools.\n"
+        "::@MODELFLOW_description_end\n"
+    )
+    task = Task(str(write(tmp_path, "script.bat", content)))
+
+    assert task.description.strip() == ":: Installs required tools."

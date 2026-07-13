@@ -14,7 +14,7 @@ class Parser:
     A class to handle parsing of code files, modules, and arguments.
     """
     
-    allowed_extensions = {".r", ".rmd", ".gms"}
+    allowed_extensions = {".r", ".rmd", ".gms", ".bat"}
     ignore_dirs = {".git", ".vscode", ".svn", "__pycache__", "venv"}
 
     @staticmethod

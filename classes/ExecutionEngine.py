@@ -114,6 +114,9 @@ class ExecutionEngine:
             elif filetype == ".gms":
                 return self._execute_gams_task(task, capture_output=capture_output, on_output=on_output,
                                                 on_process_start=on_process_start)
+            elif filetype == ".bat":
+                return self._execute_bat_task(task, capture_output=capture_output, on_output=on_output,
+                                               on_process_start=on_process_start)
             else:
                 raise ValueError(f"Unsupported file type: {filetype}")
 
@@ -135,7 +138,8 @@ class ExecutionEngine:
         return Path(value)
 
     def _run(self, command, capture_output: bool, on_output: Optional[Callable[[str], None]] = None,
-             on_process_start: Optional[Callable[[subprocess.Popen], None]] = None):
+             on_process_start: Optional[Callable[[subprocess.Popen], None]] = None,
+             env: Optional[Dict[str, str]] = None):
         """
         Run a command, either inheriting the parent process's stdio (CLI default,
         live-streamed output, returns an int) or capturing stdout/stderr (GUI use,
@@ -143,16 +147,21 @@ class ExecutionEngine:
         by an inherited child process stdio. When capturing with an `on_output`
         callback, output is streamed line-by-line as the process produces it,
         via `_run_streaming`, instead of only becoming available once it exits.
+
+        `env`, if given, replaces the child process's environment entirely (not
+        merged) -- callers that want to add to rather than replace the parent
+        environment must pass a copy of os.environ with their own keys added.
         """
         if capture_output and on_output:
-            return self._run_streaming(command, on_output, on_process_start)
+            return self._run_streaming(command, on_output, on_process_start, env)
         if capture_output:
-            result = subprocess.run(command, capture_output=True, text=True)
+            result = subprocess.run(command, capture_output=True, text=True, env=env)
             return ExecutionResult(result.returncode, result.stdout, result.stderr)
-        return subprocess.call(command)
+        return subprocess.call(command, env=env)
 
     def _run_streaming(self, command, on_output: Callable[[str], None],
-                        on_process_start: Optional[Callable[[subprocess.Popen], None]] = None) -> ExecutionResult:
+                        on_process_start: Optional[Callable[[subprocess.Popen], None]] = None,
+                        env: Optional[Dict[str, str]] = None) -> ExecutionResult:
         """
         Run a command via Popen, calling `on_output(line)` for each line of output
         as it's produced (stdout and stderr merged, in the order they're written)
@@ -174,6 +183,7 @@ class ExecutionEngine:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=env,
         )
         if on_process_start:
             on_process_start(process)
@@ -318,4 +328,39 @@ class ExecutionEngine:
 
         except Exception as e:
             self.logger.error(f"GAMS task execution failed: {str(e)}")
+            raise
+
+    def _execute_bat_task(self, task: Task, capture_output: bool = False,
+                           on_output: Optional[Callable[[str], None]] = None,
+                           on_process_start: Optional[Callable[[subprocess.Popen], None]] = None):
+        """Execute a Windows batch (.bat) task."""
+        try:
+            task_file = Path(task["file_path"])
+
+            # Config values are passed as environment variables (%NAME%), not
+            # positional command-line arguments. cmd.exe's own argument tokenizer
+            # splits on "=" (not just whitespace) when populating %1/%2/%*, so a
+            # "NAME=value" token never survives intact as a single argument -- and
+            # getting it through as one token via quoting runs straight into a
+            # well-known "cmd /c" quoting trap (mismatched quote-stripping when the
+            # command after /c contains multiple quoted segments). Environment
+            # variables sidestep all of that and are the idiomatic way batch scripts
+            # receive external parameters anyway.
+            env = os.environ.copy()
+            for param in task.get("config", []):
+                if all(k in param for k in ['script_name', 'script_value']):
+                    env[param['script_name']] = str(param['script_value'])
+
+            # Invoke via "cmd /c" explicitly rather than passing the .bat path directly --
+            # a .bat file isn't a PE executable, so relying on it "just working" without
+            # shell=True is version/behavior-dependent. This is also cheaper than shell=True:
+            # no shell-quoting/injection concern since the command list is built ourselves.
+            command = ["cmd", "/c", str(task_file)]
+            self.logger.info(f"Executing batch script: {' '.join(command)} "
+                              f"(config passed via env: {[p.get('script_name') for p in task.get('config', [])]})")
+
+            return self._run(command, capture_output, on_output, on_process_start, env)
+
+        except Exception as e:
+            self.logger.error(f"Batch task execution failed: {str(e)}")
             raise

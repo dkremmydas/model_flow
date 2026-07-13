@@ -46,9 +46,11 @@ class Task:
         
         # Determine the annotation pattern based on the file extension
         if self.filetype in (".r", ".rmd"):
-            self._parse_file_R(lines)            
+            self._parse_file_R(lines)
         elif self.filetype == ".gms":
             self._parse_file_GAMS(lines)
+        elif self.filetype == ".bat":
+            self._parse_file_BAT(lines)
         else:
             return  # Unsupported file type
         
@@ -110,6 +112,69 @@ class Task:
             print(f"Parsed task: {self.name} from module: {self.module}")
 
 
+
+    def _parse_file_BAT(self, lines):
+        """
+        Parses annotations from a Windows batch (.bat) file
+        """
+
+        # Annotation pattern for batch files (:: is the standard "comment" idiom;
+        # cmd.exe always ignores it, unlike REM which needs a trailing space)
+        annotation_pattern = r'^::\s*@MODELFLOW_(\w+):?\s*(.*)$'
+
+        isDescriptionLine = False
+
+        for line_number, line in enumerate(lines, start=1):
+            line = line.strip()
+
+            match = re.search(annotation_pattern, line)
+
+            if match:
+                key, value = match.groups()
+                key = key.strip()
+                value = value.strip()
+
+                if key == "task":
+                    task_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    self.name = task_attributes.get("name", False)
+                    self.module = task_attributes.get("module", False)
+
+                elif key == "config":
+                    config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+
+                    # The only valid parameter definition is the quoted form:
+                    #   SET "VAR=value"
+                    # A bare/unquoted "set VAR=value" or a guarded "if not defined VAR set VAR=value"
+                    # is not recognized -- if the line after the annotation doesn't match, warn and
+                    # skip this parameter entirely rather than recording a malformed entry.
+                    next_line = lines[line_number].strip() if line_number < len(lines) else ""
+
+                    default_match = re.match(r'^set\s+"(\w+)=(.*?)"\s*$', next_line, re.IGNORECASE)
+
+                    if default_match:
+                        config_attributes['script_name'] = default_match.group(1).strip()
+                        config_attributes['script_value'] = default_match.group(2).strip()
+                        self.config.append(config_attributes)
+                    else:
+                        print(
+                            f"Warning: invalid MODELFLOW_config parameter in {self.file_path} "
+                            f"at line {line_number + 1}: expected SET \"VAR=value\", got: {next_line!r}"
+                        )
+
+                elif key == "description_start":
+                    isDescriptionLine = True
+
+                elif key == "description_end":
+                    isDescriptionLine = False
+
+            else:
+                if isDescriptionLine:
+                    if line and any(char.isalpha() for char in line):
+                        self.description += f"\n{line}"
+
+        # Assign task details if available
+        if self.name and self.module:
+            print(f"Parsed task: {self.name} from module: {self.module}")
 
     def _parse_file_R(self,lines):
         """

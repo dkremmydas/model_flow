@@ -313,3 +313,30 @@ params:
   #@MODELFLOW_config name="output_dir" type="parameter" type="string"
   output_dir: "v.main2020/d.baseline/"
   ```
+
+### Bat Files
+
+Batch files use `::` as the annotation comment character (a `::`-prefixed line is always safely ignored by `cmd.exe`, unlike `REM`, which needs a trailing space to be parsed as a comment).
+
+The **only** valid form for a config parameter's value line is the quoted assignment:
+
+```bat
+SET "VAR=value"
+```
+
+An unquoted `set VAR=value`, a guarded `if not defined VAR set VAR=value`, or anything else is **not** recognized — if the line after a `::@MODELFLOW_config` annotation doesn't match this exact form, `model_flow` prints a warning and skips that parameter (it won't appear in `model_flow.db.json`, and parsing continues with the rest of the file).
+
+**Note on overrides**: unlike R/GAMS, `.bat` config values are passed to the script as environment variables rather than command-line arguments (`cmd.exe`'s own argument parser splits on `=`, not just whitespace, so a `NAME=value` token can never survive as one positional argument). Because the required `SET "VAR=value"` form is unguarded, it always executes and overwrites whatever value was passed in — so **`--set`/GUI overrides currently have no effect on `.bat` tasks**; they always run with the script's own hardcoded value. This is a known, accepted limitation.
+
+```bat
+::@MODELFLOW_task name="install_deps" module="admin"
+
+::@MODELFLOW_description_start
+:: Installs required tools into the target directory.
+::@MODELFLOW_description_end
+
+::@MODELFLOW_config name="target_dir" role="parameter" type="string"
+SET "target_dir=C:\tools"
+
+echo Installing into %target_dir%
+```

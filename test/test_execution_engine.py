@@ -70,7 +70,7 @@ def engine_with_task(tmp_path):
 def fake_call(monkeypatch):
     calls = []
 
-    def _fake_call(command):
+    def _fake_call(command, env=None):
         calls.append(command)
         return 0
 
@@ -84,7 +84,7 @@ def fake_run(monkeypatch):
 
     calls = []
 
-    def _fake_run(command, capture_output=True, text=True):
+    def _fake_run(command, capture_output=True, text=True, env=None):
         calls.append(command)
         return std_subprocess.CompletedProcess(command, returncode=0, stdout="hello output", stderr="")
 
@@ -97,7 +97,7 @@ def fake_popen(monkeypatch):
     calls = []
 
     class FakePopen:
-        def __init__(self, command, stdout=None, stderr=None, text=None, bufsize=None):
+        def __init__(self, command, stdout=None, stderr=None, text=None, bufsize=None, env=None):
             calls.append(command)
             self.stdout = iter(["line1\n", "line2\n"])
             self.returncode = 0
@@ -116,7 +116,7 @@ def fake_popen_killable(monkeypatch):
     calls = []
 
     class FakePopen:
-        def __init__(self, command, stdout=None, stderr=None, text=None, bufsize=None):
+        def __init__(self, command, stdout=None, stderr=None, text=None, bufsize=None, env=None):
             calls.append(command)
             self._terminated = False
             self.returncode = None
@@ -170,6 +170,34 @@ def test_execute_gams_task_does_not_convert_backslashes(engine, fake_call):
     assert fake_call == [
         ["C:\\GAMS\\gams.exe", "C:\\gams\\test_script.gms", "limit=15"]
     ]
+
+
+def test_execute_bat_task_invokes_via_cmd_and_does_not_convert_backslashes(engine, monkeypatch):
+    """.bat config values are passed as environment variables, not positional CLI
+    args: cmd.exe's own argument tokenizer splits on "=" (not just whitespace) when
+    populating %1/%2/%*, so a "NAME=value" token never survives as one argument --
+    confirmed empirically against real cmd.exe, not just reasoned about."""
+    calls = []
+    envs = []
+
+    def fake_call(command, env=None):
+        calls.append(command)
+        envs.append(env)
+        return 0
+
+    monkeypatch.setattr(execution_engine_module.subprocess, "call", fake_call)
+
+    task = {
+        "file_path": "C:\\scripts\\install_deps.bat",
+        "config": [{"script_name": "target_dir", "script_value": "C:\\tools"}],
+    }
+
+    result = engine._execute_bat_task(task)
+
+    assert result == 0
+    assert calls == [["cmd", "/c", "C:\\scripts\\install_deps.bat"]]  # no positional args
+    assert envs[0]["target_dir"] == "C:\\tools"
+    assert envs[0]["PATH"]  # started from a copy of the real environment, not a bare dict
 
 
 def test_execute_rmd_task_sets_gams_dir_on_path(engine, fake_call, tmp_path):
