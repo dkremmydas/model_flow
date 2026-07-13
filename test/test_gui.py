@@ -146,6 +146,48 @@ async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp
         assert app.query_one("#select-ext_par") is not None
 
 
+async def test_toggle_output_binding_switches_between_fullscreen_and_hidden(tmp_path):
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        execute_panel = app.query_one(ExecuteTask)
+        main_view = app.main_view
+        assert execute_panel.display is False
+        assert main_view.display is True
+
+        await pilot.press("ctrl+o")
+        assert execute_panel.display is True
+        assert main_view.display is False
+
+        await pilot.press("ctrl+o")
+        assert execute_panel.display is False
+        assert main_view.display is True
+
+
+async def test_execute_task_reveals_hidden_output_panel_fullscreen(tmp_path):
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        task_node = select_task.tree.root.children[0].children[0]
+        await select_task_node(pilot, select_task, task_node)
+
+        execute_panel = app.query_one(ExecuteTask)
+        assert execute_panel.display is False
+
+        with patch.object(
+            app.engine, "execute_task",
+            return_value=ExecutionResult(returncode=0, stdout="ran ok", stderr=""),
+        ):
+            await app.action_execute_task()
+            await pilot.pause()
+
+        assert execute_panel.display is True
+        assert app.main_view.display is False
+
+
 async def test_execute_task_shows_error_status_on_engine_failure(tmp_path):
     write_db_with_one_task(tmp_path)
     app = ModelFlowApp(make_config(tmp_path))

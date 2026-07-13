@@ -288,7 +288,7 @@ class ExecuteTask(Widget):
     ExecuteTask {
         layout: vertical;
         width: 100%;
-        height: 30%;
+        height: 1fr;
         border: solid green;
         margin: 1;
         padding: 1;
@@ -359,6 +359,7 @@ class ModelFlowApp(App):
     BINDINGS = [
         ("escape", "quit", "Quit"),
         ("ctrl+r", "execute_task", "Execute Task"),
+        ("ctrl+o", "toggle_output", "Toggle Output"),
     ]
 
 
@@ -370,6 +371,7 @@ class ModelFlowApp(App):
         self.database = None
         self.engine = None
         self.execute_panel = None
+        self.main_view = None
         self.selected_task = None  # (module, task_name) of the currently selected task
         self.startup_error = None
 
@@ -400,11 +402,13 @@ class ModelFlowApp(App):
             )
         else:
             self.execute_panel = ExecuteTask()
-            yield Horizontal(
+            self.execute_panel.display = False
+            self.main_view = Horizontal(
                 SelectTask(self),
                 ShowTask(self),
                 id="container"
             )
+            yield self.main_view
             yield self.execute_panel
 
         yield Footer()
@@ -425,6 +429,19 @@ class ModelFlowApp(App):
         show_task_widget = self.query_one("#show-task", ShowTask)
         await show_task_widget.show_task(task)
 
+    def action_toggle_output(self) -> None:
+        """Toggle the execution output panel between full-screen and hidden.
+
+        The two are mutually exclusive: showing output hides the browse view
+        (SelectTask/ShowTask) so the output panel fills the screen, and hiding
+        it restores the browse view.
+        """
+        if not self.execute_panel or not self.main_view:
+            return
+        show_output = not self.execute_panel.display
+        self.execute_panel.display = show_output
+        self.main_view.display = not show_output
+
     async def action_execute_task(self) -> None:
         """Execute the currently selected task with any user-edited parameter overrides."""
         if not self.database or not self.engine or not self.selected_task or not self.execute_panel:
@@ -434,6 +451,10 @@ class ModelFlowApp(App):
         show_task_widget = self.query_one("#show-task", ShowTask)
         overrides = show_task_widget.get_overrides()
 
+        # Surface the panel full-screen automatically so a run's result is never missed.
+        self.execute_panel.display = True
+        if self.main_view:
+            self.main_view.display = False
         self.execute_panel.set_status(f"Running {module}/{task_name}...")
 
         try:
