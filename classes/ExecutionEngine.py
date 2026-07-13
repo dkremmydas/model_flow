@@ -108,6 +108,18 @@ class ExecutionEngine:
             raise RuntimeError(f"Failed to execute task {module}/{task_name}: {str(e)}") from e
     
     
+    def _config_path(self, key: str) -> Path:
+        """
+        Fetch a config value expected to be a filesystem path, raising a clear,
+        actionable error instead of a cryptic TypeError from Path(None) if the
+        key is missing or empty (e.g. an optional key like Pandoc_dir that
+        Config does not enforce as required).
+        """
+        value = self.config.get(key)
+        if not value:
+            raise ValueError(f"'{key}' is not set in the configuration file.")
+        return Path(value)
+
     def _run(self, command, capture_output: bool):
         """
         Run a command, either inheriting the parent process's stdio (CLI default,
@@ -124,7 +136,7 @@ class ExecutionEngine:
         """Execute an R script task."""
 
         try:
-            rscript_path = Path(self.config.get("Rscript_exe"))
+            rscript_path = self._config_path("Rscript_exe")
             task_file = Path(task["file_path"])
 
             # Convert Windows paths to R-friendly format
@@ -151,9 +163,9 @@ class ExecutionEngine:
         """Execute an R Markdown task with output directory support and strict type handling."""
         try:
             # Get required paths from config
-            rscript_path = Path(self.config.get("Rscript_exe"))
-            pandoc_dir = Path(self.config.get("Pandoc_dir"))
-            gams_dir = Path(self.config.get("GAMS_exe")).parent
+            rscript_path = self._config_path("Rscript_exe")
+            pandoc_dir = self._config_path("Pandoc_dir")
+            gams_dir = self._config_path("GAMS_exe").parent
             task_file = Path(task["file_path"])
 
             # Set output directory (default to config's Temporary_directory or current dir)
@@ -232,7 +244,7 @@ class ExecutionEngine:
     def _execute_gams_task(self, task: Task, capture_output: bool = False):
         """Execute a GAMS task."""
         try:
-            gams_exe = Path(self.config.get("GAMS_exe"))
+            gams_exe = self._config_path("GAMS_exe")
             task_file = Path(task["file_path"])
 
             args_list = []

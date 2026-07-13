@@ -22,8 +22,10 @@ class Config:
     }
     
     DIRECTORY_KEYS = ["Code_directory", "Database_directory"]  # Keys that must be valid directories
-    
+
     DIRECTORY_CREATE = ["Temporary_directory"]  # Keys that must be created if not exist
+
+    EXECUTABLE_KEYS = ["Rscript_exe", "GAMS_exe"]  # Keys that must point to an existing executable file
     
     
 
@@ -140,6 +142,9 @@ class Config:
         """
         Create a new Config instance by asking the user for required parameters and save it to a JSON file.
 
+        Directory and executable paths are validated as they're entered; an invalid path prints a
+        warning and re-prompts for the same key rather than aborting the whole flow.
+
         Returns:
             Config: A new Config instance with user-provided values.
         """
@@ -147,20 +152,28 @@ class Config:
         data = {}
 
         for key, prompt in Config.REQUIRED_KEYS.items():
-            value = input(prompt).strip()
-            if key in Config.DIRECTORY_KEYS:
+            while True:
+                value = input(prompt).strip()
                 path = Path(value)
-                if not path.is_dir():
-                    raise ValueError(f"The provided path for '{key}' is not a valid directory: {value}")
-            elif key in Config.DIRECTORY_CREATE:
-                path = Path(value)
-                if not path.exists():
-                    print(f"The directory for '{key}' does not exist. Creating it at: {value}")
-                    path.mkdir(parents=True, exist_ok=True)
-                path = Path(value)
-                if not path.is_dir():
-                    raise ValueError(f"The provided path for '{key}' is not a valid directory: {value}")
-            data[key] = value
+
+                if key in Config.DIRECTORY_KEYS:
+                    if not path.is_dir():
+                        print(f"Warning: '{value}' is not a valid directory. Please try again.")
+                        continue
+                elif key in Config.EXECUTABLE_KEYS:
+                    if not path.is_file():
+                        print(f"Warning: '{value}' does not point to an existing file. Please try again.")
+                        continue
+                elif key in Config.DIRECTORY_CREATE:
+                    if not path.exists():
+                        print(f"The directory for '{key}' does not exist. Creating it at: {value}")
+                        path.mkdir(parents=True, exist_ok=True)
+                    if not path.is_dir():
+                        print(f"Warning: '{value}' is not a valid directory. Please try again.")
+                        continue
+
+                data[key] = value
+                break
 
         json_string = json.dumps(data)
         config = Config(config_source=json_string)

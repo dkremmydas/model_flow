@@ -26,6 +26,20 @@ def engine(tmp_path):
 
 
 @pytest.fixture
+def engine_without_pandoc(tmp_path):
+    (tmp_path / "model_flow.db.json").write_text("{}", encoding="utf-8")
+    config_data = {
+        "Code_directory": str(tmp_path),
+        "Database_directory": str(tmp_path),
+        "Temporary_directory": str(tmp_path),
+        "Rscript_exe": "C:/R/Rscript.exe",
+        "GAMS_exe": "C:/GAMS/gams.exe",
+        # Pandoc_dir intentionally omitted, matching a real config that predates it.
+    }
+    return ExecutionEngine(Config(json.dumps(config_data)))
+
+
+@pytest.fixture
 def engine_with_task(tmp_path):
     db_content = {
         "test_module": [
@@ -142,6 +156,19 @@ def test_execute_task_without_overrides_uses_database_defaults(engine_with_task,
 
     assert result == 0
     assert fake_call == [["C:\\R\\Rscript.exe", "C:/scripts/test_script.R", "ext_par=5"]]
+
+
+def test_execute_rmd_task_raises_clear_error_when_pandoc_dir_missing(engine_without_pandoc, fake_call):
+    task = {
+        "name": "1_test_rmd",
+        "file_path": "C:\\scripts\\test_script.rmd",
+        "config": [],
+    }
+
+    with pytest.raises(ValueError, match="Pandoc_dir"):
+        engine_without_pandoc._execute_rmd_task(task, output_dir=".")
+
+    assert fake_call == []  # must fail before ever building/running a command
 
 
 def test_execute_r_task_capture_output_returns_execution_result(engine, fake_run):

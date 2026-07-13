@@ -12,7 +12,7 @@ Terminology (also in README.md): a **Module** is a folder containing **Tasks** (
 
 Install runtime deps with `pip install -r requirements.txt` (`textual`, `rich`, `numpy`), or `pip install -r requirements-dev.txt` to also get `pytest`/`pytest-asyncio`.
 
-```
+```bash
 python model_flow.py init                                   # interactively create model_flow.config.json
 python model_flow.py build --config=<config.json|dir>        # scan Code_directory, write model_flow.db.json
 python model_flow.py list_tasks --config=<config> [--module=<name>]
@@ -30,7 +30,7 @@ Run the test suite with `python -m pytest test/`. Tests live in `test/test_*.py`
 
 Data flows: **annotated script → `Task` (parses one file) → `Parser.parse_modules` (walks a directory, builds one `Task` per script) → `model_flow.db.json` (via `build` command) → `Database` (loads/queries that JSON) → `ExecutionEngine` (runs a task's underlying script)**. The CLI (`model_flow.py`) and the GUI (`textual_gui/app.py`) are two front ends over the same `Database`/`ExecutionEngine`/`Config` classes.
 
-- **`classes/Config.py`** — loads/validates `model_flow.config.json` (or an inline JSON string). Required keys: `Code_directory`, `Database_directory`, `Temporary_directory`, `Rscript_exe`, `GAMS_exe`. `Config.get()` is case-insensitive. `is_empty()` signals a failed/invalid load — callers must check it (constructor swallows errors into `self.data = None` rather than raising).
+- **`classes/Config.py`** — loads/validates `model_flow.config.json` (or an inline JSON string). Required keys: `Code_directory`, `Database_directory`, `Temporary_directory`, `Rscript_exe`, `GAMS_exe`. `Config.get()` is case-insensitive. `is_empty()` signals a failed/invalid load — callers must check it (constructor swallows errors into `self.data = None` rather than raising). `create_from_user_input()` (used by the `init` CLI command) validates each path as it's entered — `DIRECTORY_KEYS` must be an existing directory, `EXECUTABLE_KEYS` (`Rscript_exe`, `GAMS_exe`) must be an existing *file* (not just its containing directory — a directory here is a common, previously-silent misconfiguration that surfaces as a cryptic error deep in `ExecutionEngine`), `DIRECTORY_CREATE` (`Temporary_directory`) is auto-created if missing. An invalid entry prints a warning and re-prompts for that same key rather than aborting the whole flow. Note `Pandoc_dir` (used by `ExecutionEngine._execute_rmd_task`) is *not* one of the required/prompted keys — it's optional at the `Config` level but effectively required for any `.rmd` task, so a config built via `init` can still be missing it; `ExecutionEngine._config_path()` raises a clear `ValueError` if so, rather than a bare `Path(None)` `TypeError`.
 
 - **`classes/Task.py`** — parses a single script file for `@MODELFLOW_*` annotations. Two parsers: `_parse_file_R` (`.r`/`.rmd`, annotation prefix `#@MODELFLOW_...`) and `_parse_file_GAMS` (`.gms`, annotation prefix `*@MODELFLOW_...`). Recognized annotations: `task` (sets `name`/`module`), `config` (appends an entry to `self.config`, capturing the *next line's* literal assignment as `script_name`/`script_value` — this is how default parameter values are discovered without executing the script), and `description_start`/`description_end` (accumulates free text into `self.description`). A file with no `task` annotation yields `self.name = False` and is skipped by the parser.
 
