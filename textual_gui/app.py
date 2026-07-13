@@ -12,6 +12,7 @@ from rich.text import Text
 from classes.Config import Config
 from classes.Database import Database
 from classes.ExecutionEngine import ExecutionEngine, ExecutionResult
+from classes.Parser import Parser
 from classes.Task import Task
 
 
@@ -66,6 +67,13 @@ class SelectTask(Widget):
     def on_mount(self) -> None:
         """Initialize the application when it starts."""
         self.filter_tree("")
+
+    def refresh_from_database(self) -> None:
+        """Reload modules/tasks from the database (e.g. after a rebuild) and re-render the tree."""
+        self.modules = self.database.list_modules() or ["No modules available"]
+        self.module_tasks = {module: self.database.list_module_tasks(module) for module in self.modules}
+        search_input = self.query_one("#module-search", Input)
+        self.filter_tree(search_input.value)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter the module/task tree as the user types."""
@@ -318,23 +326,57 @@ class ExecuteTask(Widget):
     def set_status(self, message: str) -> None:
         self.status.update(message)
 
-    def show_result(self, module: str, task_name: str, result) -> None:
+    def start_running(self, message: str) -> None:
+        """Announce a run has begun: show the status message, a persistent header
+        sub-title so it's visible even while this panel is toggled off (ctrl+o) in
+        favor of the browse view, and a clean output log ready to receive streamed
+        output."""
+        self.set_status(message)
+        if self.app:
+            self.app.sub_title = message
         self.output_log.clear()
-        if isinstance(result, ExecutionResult):
-            if result.stdout:
-                self.output_log.write(result.stdout)
-            if result.stderr:
-                self.output_log.write(result.stderr)
-            returncode = result.returncode
-        else:
-            returncode = result
+
+    def append_output(self, line: str) -> None:
+        """Append one line of live-streamed subprocess output. Must only be called
+        from the UI thread -- callers driving execution from a worker thread
+        should marshal through e.g. Textual's App.call_from_thread."""
+        self.output_log.write_line(line)
+
+    def finish_running(self) -> None:
+        """Clear the header sub-title once a run has ended. Every code path that
+        ends a run must call this (directly or via show_result/show_error)."""
+        if self.app:
+            self.app.sub_title = ""
+
+    def show_result(self, module: str, task_name: str, result, streamed: bool = False) -> None:
+        """Report a finished run's result. `streamed=True` means output was already
+        appended live via append_output as it happened, so it isn't rewritten here
+        (which would otherwise duplicate it) -- only the final status line updates."""
+        self.finish_running()
+        if not streamed:
+            self.output_log.clear()
+            if isinstance(result, ExecutionResult):
+                if result.stdout:
+                    self.output_log.write(result.stdout)
+                if result.stderr:
+                    self.output_log.write(result.stderr)
+        returncode = result.returncode if isinstance(result, ExecutionResult) else result
         status = "succeeded" if returncode == 0 else f"failed (exit code {returncode})"
+        self.output_log.write_line(f"Task {module}/{task_name}, finished")
         self.set_status(f"{module}/{task_name} {status}")
 
     def show_error(self, module: str, task_name: str, error: str) -> None:
+        self.finish_running()
         self.output_log.clear()
         self.output_log.write(error)
         self.set_status(f"{module}/{task_name} failed to start: {error}")
+
+    def show_aborted(self, module: str, task_name: str) -> None:
+        """Report a run that was stopped via action_kill_task (ctrl+k), rather than
+        one that ran to completion (show_result) or never started (show_error)."""
+        self.finish_running()
+        self.output_log.write_line(f"Task {module}/{task_name}, aborted")
+        self.set_status(f"{module}/{task_name} aborted")
 
 
 
@@ -359,7 +401,9 @@ class ModelFlowApp(App):
     BINDINGS = [
         ("escape", "quit", "Quit"),
         ("ctrl+r", "execute_task", "Execute Task"),
+        ("ctrl+k", "kill_task", "Abort Task"),
         ("ctrl+o", "toggle_output", "Toggle Output"),
+        ("ctrl+b", "rebuild_database", "Rebuild DB"),
     ]
 
 
@@ -374,6 +418,8 @@ class ModelFlowApp(App):
         self.main_view = None
         self.selected_task = None  # (module, task_name) of the currently selected task
         self.startup_error = None
+        self.current_process = None  # subprocess.Popen of the task currently running, if any
+        self.execution_cancelled = False  # set just before terminating current_process
 
         try:
             self.database = Database(self.config)
@@ -446,6 +492,8 @@ class ModelFlowApp(App):
         """Execute the currently selected task with any user-edited parameter overrides."""
         if not self.database or not self.engine or not self.selected_task or not self.execute_panel:
             return
+        if self.current_process is not None and self.current_process.poll() is None:
+            return  # a task is already running -- ctrl+k aborts it first
 
         module, task_name = self.selected_task
         show_task_widget = self.query_one("#show-task", ShowTask)
@@ -455,7 +503,18 @@ class ModelFlowApp(App):
         self.execute_panel.display = True
         if self.main_view:
             self.main_view.display = False
-        self.execute_panel.set_status(f"Running {module}/{task_name}...")
+        self.execution_cancelled = False
+        self.execute_panel.start_running(f"Running {module}/{task_name}... (ctrl+k to abort)")
+
+        # execute_task runs on a worker thread; append_output must only touch
+        # widgets from the UI thread, so marshal each line back via call_from_thread.
+        def on_output(line: str) -> None:
+            self.call_from_thread(self.execute_panel.append_output, line)
+
+        # Give action_kill_task something to terminate() -- safe to call from another
+        # thread than the one reading the process's output.
+        def on_process_start(process) -> None:
+            self.current_process = process
 
         try:
             result = await asyncio.to_thread(
@@ -465,15 +524,66 @@ class ModelFlowApp(App):
                 None,
                 overrides,
                 True,
+                on_output,
+                on_process_start,
             )
         except Exception as e:
-            self.execute_panel.show_error(module, task_name, str(e))
+            self.current_process = None
+            if self.execution_cancelled:
+                self.execute_panel.show_aborted(module, task_name)
+            else:
+                self.execute_panel.show_error(module, task_name, str(e))
             return
 
-        self.execute_panel.show_result(module, task_name, result)
+        self.current_process = None
+        if self.execution_cancelled:
+            self.execute_panel.show_aborted(module, task_name)
+        else:
+            self.execute_panel.show_result(module, task_name, result, streamed=True)
 
         for script_name, value in overrides.items():
             self.database.add_user_value(module, task_name, script_name, value)
+
+    def action_kill_task(self) -> None:
+        """Abort the currently running task, if any."""
+        if not self.execute_panel or not self.current_process or self.current_process.poll() is not None:
+            return
+        self.execution_cancelled = True
+        self.execute_panel.set_status("Aborting...")
+        self.current_process.terminate()
+
+    async def action_rebuild_database(self) -> None:
+        """Rescan Code_directory, regenerate model_flow.db.json, and refresh the browse view."""
+        if not self.database or not self.engine or not self.execute_panel:
+            return
+
+        self.execute_panel.display = True
+        if self.main_view:
+            self.main_view.display = False
+        self.execute_panel.start_running("Rebuilding task database...")
+        self.execute_panel.output_log.clear()
+
+        code_directory = self.config.get("Code_directory")
+
+        try:
+            modules = await asyncio.to_thread(Parser.parse_modules, code_directory)
+        except Exception as e:
+            self.execute_panel.show_error("build", "model_flow.db.json", str(e))
+            return
+
+        # Update both this app's Database and the ExecutionEngine's own (separate) instance,
+        # so subsequent executions use the freshly-scanned tasks too.
+        self.database.data = modules
+        self.database.save()
+        self.engine.database.data = modules
+
+        module_count = len(modules)
+        task_count = sum(len(tasks) for tasks in modules.values())
+        self.execute_panel.output_log.write(f"Scanned: {code_directory}\n")
+        self.execute_panel.finish_running()
+        self.execute_panel.set_status(f"Database rebuilt: {module_count} modules, {task_count} tasks")
+
+        self.query_one(SelectTask).refresh_from_database()
 
 
 

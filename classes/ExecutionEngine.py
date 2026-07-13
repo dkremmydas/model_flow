@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 from classes.Database import Database
 from classes.Config import Config
 from classes.Task import Task
@@ -53,7 +53,9 @@ class ExecutionEngine:
 
     
     def execute_task(self, module: str, task_name: str, output_dir: Optional[str] = None,
-                      overrides: Optional[Dict[str, str]] = None, capture_output: bool = False):
+                      overrides: Optional[Dict[str, str]] = None, capture_output: bool = False,
+                      on_output: Optional[Callable[[str], None]] = None,
+                      on_process_start: Optional[Callable[[subprocess.Popen], None]] = None):
         """
         Execute the given task based on its metadata.
 
@@ -68,6 +70,15 @@ class ExecutionEngine:
                 (like the Textual GUI) whose own terminal rendering would otherwise be corrupted
                 by an inherited child process stdio. Defaults to False (CLI behavior: live-streamed
                 output to the console, returns an int return code) so existing CLI behavior is unchanged.
+            on_output (callable, optional): Only used when capture_output=True. If given, output is
+                streamed to it one line at a time as the process produces it (instead of only being
+                available once the process exits) via subprocess.Popen. Runs on whatever thread calls
+                execute_task -- callers updating a UI from it must marshal back to the UI thread
+                themselves (e.g. Textual's App.call_from_thread).
+            on_process_start (callable, optional): Only used together with on_output (the streaming
+                path). Called once with the subprocess.Popen instance as soon as it's created, giving
+                the caller a handle to (e.g.) terminate() the process from elsewhere -- terminating a
+                Popen from a different thread than the one reading its output is safe.
 
         Returns:
             int: The return code of the executed process (capture_output=False).
@@ -95,11 +106,14 @@ class ExecutionEngine:
 
             # Execute based on file type
             if filetype == ".r":
-                return self._execute_r_task(task, capture_output=capture_output)
+                return self._execute_r_task(task, capture_output=capture_output, on_output=on_output,
+                                             on_process_start=on_process_start)
             elif filetype == ".rmd":
-                return self._execute_rmd_task(task, final_output_dir, capture_output=capture_output)
+                return self._execute_rmd_task(task, final_output_dir, capture_output=capture_output,
+                                               on_output=on_output, on_process_start=on_process_start)
             elif filetype == ".gms":
-                return self._execute_gams_task(task, capture_output=capture_output)
+                return self._execute_gams_task(task, capture_output=capture_output, on_output=on_output,
+                                                on_process_start=on_process_start)
             else:
                 raise ValueError(f"Unsupported file type: {filetype}")
 
@@ -120,19 +134,60 @@ class ExecutionEngine:
             raise ValueError(f"'{key}' is not set in the configuration file.")
         return Path(value)
 
-    def _run(self, command, capture_output: bool):
+    def _run(self, command, capture_output: bool, on_output: Optional[Callable[[str], None]] = None,
+             on_process_start: Optional[Callable[[subprocess.Popen], None]] = None):
         """
         Run a command, either inheriting the parent process's stdio (CLI default,
         live-streamed output, returns an int) or capturing stdout/stderr (GUI use,
         returns an ExecutionResult) so a Textual TUI's own rendering isn't corrupted
-        by an inherited child process stdio.
+        by an inherited child process stdio. When capturing with an `on_output`
+        callback, output is streamed line-by-line as the process produces it,
+        via `_run_streaming`, instead of only becoming available once it exits.
         """
+        if capture_output and on_output:
+            return self._run_streaming(command, on_output, on_process_start)
         if capture_output:
             result = subprocess.run(command, capture_output=True, text=True)
             return ExecutionResult(result.returncode, result.stdout, result.stderr)
         return subprocess.call(command)
 
-    def _execute_r_task(self, task: Task, capture_output: bool = False):
+    def _run_streaming(self, command, on_output: Callable[[str], None],
+                        on_process_start: Optional[Callable[[subprocess.Popen], None]] = None) -> ExecutionResult:
+        """
+        Run a command via Popen, calling `on_output(line)` for each line of output
+        as it's produced (stdout and stderr merged, in the order they're written)
+        rather than waiting for the process to exit. Note this is only as "live"
+        as the child process's own output buffering allows -- e.g. R/Rscript
+        block-buffers stdout when it isn't a terminal, so output from long
+        stretches of a script with no explicit flush may still arrive in bursts.
+
+        If `on_process_start` is given, it's called with the Popen instance right
+        after creation, so a caller elsewhere (e.g. a "kill" keybinding) can hold
+        onto it and call terminate() -- if the process is terminated mid-run, the
+        stdout pipe closes, the read loop below ends, and this still returns a
+        normal ExecutionResult (with whatever returncode the OS reports for a
+        terminated process) rather than raising.
+        """
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        if on_process_start:
+            on_process_start(process)
+        lines = []
+        for line in process.stdout:
+            line = line.rstrip("\n")
+            lines.append(line)
+            on_output(line)
+        process.wait()
+        return ExecutionResult(process.returncode, "\n".join(lines), "")
+
+    def _execute_r_task(self, task: Task, capture_output: bool = False,
+                         on_output: Optional[Callable[[str], None]] = None,
+                         on_process_start: Optional[Callable[[subprocess.Popen], None]] = None):
         """Execute an R script task."""
 
         try:
@@ -153,13 +208,15 @@ class ExecutionEngine:
             command = [str(rscript_path), r_path(task_file)] + args_list
             self.logger.info(f"Executing R script: {' '.join(command)}")
 
-            return self._run(command, capture_output)
+            return self._run(command, capture_output, on_output, on_process_start)
 
         except Exception as e:
             self.logger.error(f"R task execution failed: {str(e)}")
             raise
 
-    def _execute_rmd_task(self, task: Task, output_dir=None, capture_output: bool = False):
+    def _execute_rmd_task(self, task: Task, output_dir=None, capture_output: bool = False,
+                           on_output: Optional[Callable[[str], None]] = None,
+                           on_process_start: Optional[Callable[[subprocess.Popen], None]] = None):
         """Execute an R Markdown task with output directory support and strict type handling."""
         try:
             # Get required paths from config
@@ -231,7 +288,7 @@ class ExecutionEngine:
             self.logger.info(f"Running {command}")
             self.logger.info(f"Rendering to {output_file}")
 
-            result = self._run(command, capture_output)
+            result = self._run(command, capture_output, on_output, on_process_start)
             returncode = result.returncode if isinstance(result, ExecutionResult) else result
             if returncode == 0:
                 self.logger.info(f"Successfully created: {output_file}")
@@ -241,7 +298,9 @@ class ExecutionEngine:
             self.logger.error(f"R Markdown execution failed: {str(e)}")
             raise
 
-    def _execute_gams_task(self, task: Task, capture_output: bool = False):
+    def _execute_gams_task(self, task: Task, capture_output: bool = False,
+                            on_output: Optional[Callable[[str], None]] = None,
+                            on_process_start: Optional[Callable[[subprocess.Popen], None]] = None):
         """Execute a GAMS task."""
         try:
             gams_exe = self._config_path("GAMS_exe")
@@ -255,7 +314,7 @@ class ExecutionEngine:
             command = [str(gams_exe), str(task_file)] + args_list
             self.logger.info(f"Executing GAMS script: {' '.join(command)}")
 
-            return self._run(command, capture_output)
+            return self._run(command, capture_output, on_output, on_process_start)
 
         except Exception as e:
             self.logger.error(f"GAMS task execution failed: {str(e)}")

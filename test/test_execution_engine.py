@@ -92,6 +92,58 @@ def fake_run(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def fake_popen(monkeypatch):
+    calls = []
+
+    class FakePopen:
+        def __init__(self, command, stdout=None, stderr=None, text=None, bufsize=None):
+            calls.append(command)
+            self.stdout = iter(["line1\n", "line2\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", FakePopen)
+    return calls
+
+
+@pytest.fixture
+def fake_popen_killable(monkeypatch):
+    """A FakePopen whose stdout never stops producing lines until terminate() is
+    called, so tests can exercise 'process was killed mid-stream' deterministically."""
+    calls = []
+
+    class FakePopen:
+        def __init__(self, command, stdout=None, stderr=None, text=None, bufsize=None):
+            calls.append(command)
+            self._terminated = False
+            self.returncode = None
+            self.stdout = self._make_stdout()
+
+        def _make_stdout(self):
+            i = 0
+            while not self._terminated:
+                i += 1
+                yield f"line{i}\n"
+
+        def terminate(self):
+            self._terminated = True
+            self.returncode = 1
+
+        def wait(self):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", FakePopen)
+    return calls
+
+
 def test_execute_r_task_builds_command_with_forward_slashes(engine, fake_call):
     task = {
         "file_path": "C:\\scripts\\test_script.R",
@@ -183,3 +235,84 @@ def test_execute_r_task_capture_output_returns_execution_result(engine, fake_run
     assert result.returncode == 0
     assert result.stdout == "hello output"
     assert fake_run == [["C:\\R\\Rscript.exe", "C:/scripts/test_script.R", "ext_par=5"]]
+
+
+def test_execute_r_task_streams_output_via_on_output(engine, fake_popen):
+    task = {
+        "file_path": "C:\\scripts\\test_script.R",
+        "config": [{"script_name": "ext_par", "script_value": "5"}],
+    }
+    received = []
+
+    result = engine._execute_r_task(task, capture_output=True, on_output=received.append)
+
+    assert received == ["line1", "line2"]  # streamed as they were produced, not after the fact
+    assert isinstance(result, ExecutionResult)
+    assert result.returncode == 0
+    assert result.stdout == "line1\nline2"
+    assert fake_popen == [["C:\\R\\Rscript.exe", "C:/scripts/test_script.R", "ext_par=5"]]
+
+
+def test_execute_task_streams_output_end_to_end_with_overrides(engine_with_task, fake_popen):
+    received = []
+
+    result = engine_with_task.execute_task(
+        "test_module", "1_test_task", overrides={"ext_par": "99"}, capture_output=True, on_output=received.append
+    )
+
+    assert received == ["line1", "line2"]
+    assert isinstance(result, ExecutionResult)
+    assert fake_popen == [["C:\\R\\Rscript.exe", "C:/scripts/test_script.R", "ext_par=99"]]
+
+
+def test_run_streaming_calls_on_process_start_with_the_popen_instance(engine, fake_popen_killable):
+    task = {
+        "file_path": "C:\\scripts\\test_script.R",
+        "config": [],
+    }
+    captured = []
+
+    engine._execute_r_task(task, capture_output=True, on_output=lambda line: captured[0].terminate(),
+                            on_process_start=captured.append)
+
+    assert len(captured) == 1
+    assert hasattr(captured[0], "terminate")  # it's the Popen (fake), not something else
+
+
+def test_run_streaming_stops_cleanly_when_process_is_terminated_mid_stream(engine, fake_popen_killable):
+    """A kill switch calls Popen.terminate() from elsewhere while _run_streaming is
+    still reading lines. The read loop must stop and still return a normal
+    ExecutionResult (not hang or raise) once the process is terminated."""
+    task = {
+        "file_path": "C:\\scripts\\test_script.R",
+        "config": [],
+    }
+    received = []
+    process_holder = []
+
+    def on_output(line):
+        received.append(line)
+        if len(received) == 3:
+            process_holder[0].terminate()  # simulate the kill switch firing mid-stream
+
+    result = engine._execute_r_task(
+        task, capture_output=True, on_output=on_output, on_process_start=process_holder.append
+    )
+
+    assert received == ["line1", "line2", "line3"]  # stopped right after terminate()
+    assert isinstance(result, ExecutionResult)
+    assert result.returncode == 1  # whatever the (fake) terminated process reports
+
+
+def test_capture_output_without_on_output_still_uses_blocking_subprocess_run(engine, fake_run, fake_popen):
+    """When capture_output=True but no on_output callback is given, fall back to the
+    original blocking subprocess.run path rather than streaming -- Popen must not be used."""
+    task = {
+        "file_path": "C:\\scripts\\test_script.R",
+        "config": [{"script_name": "ext_par", "script_value": "5"}],
+    }
+
+    result = engine._execute_r_task(task, capture_output=True)
+
+    assert result.stdout == "hello output"
+    assert fake_popen == []  # Popen (streaming) was never invoked

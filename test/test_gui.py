@@ -1,5 +1,7 @@
+import asyncio
 import json
-from unittest.mock import patch
+import threading
+from unittest.mock import ANY, patch
 
 import pytest
 from textual.widgets import Tree
@@ -130,8 +132,11 @@ async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp
             await pilot.pause()
 
         mock_execute.assert_called_once_with(
-            "test_module", "1_test_task", None, {"ext_par": "99"}, True
+            "test_module", "1_test_task", None, {"ext_par": "99"}, True, ANY, ANY
         )
+        on_output, on_process_start = mock_execute.call_args.args[5:7]
+        assert callable(on_output)
+        assert callable(on_process_start)
 
         execute_panel = app.query_one(ExecuteTask)
         assert "succeeded" in str(execute_panel.status.content)
@@ -144,6 +149,166 @@ async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp
         # Re-selecting the task should now offer the recorded value as a history option.
         await select_task_node(pilot, select_task, task_node)
         assert app.query_one("#select-ext_par") is not None
+
+
+async def test_execute_task_streams_output_live_via_call_from_thread(tmp_path):
+    """The on_output callback passed to ExecutionEngine.execute_task runs on a real
+    worker thread (via asyncio.to_thread) in production. Exercise that for real here
+    rather than calling it directly, since App.call_from_thread raises if invoked
+    from the app's own thread -- calling it wrong wouldn't be caught otherwise."""
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        task_node = select_task.tree.root.children[0].children[0]
+        await select_task_node(pilot, select_task, task_node)
+
+        def fake_execute_task(module, task_name, output_dir, overrides, capture_output, on_output, on_process_start):
+            on_output("streaming line 1")
+            on_output("streaming line 2")
+            return ExecutionResult(returncode=0, stdout="streaming line 1\nstreaming line 2", stderr="")
+
+        with patch.object(app.engine, "execute_task", side_effect=fake_execute_task):
+            await app.action_execute_task()
+            await pilot.pause()
+
+        execute_panel = app.query_one(ExecuteTask)
+        assert list(execute_panel.output_log.lines) == [
+            "streaming line 1",
+            "streaming line 2",
+            "Task test_module/1_test_task, finished",
+        ]
+        assert "succeeded" in str(execute_panel.status.content)
+
+
+async def test_kill_task_terminates_running_process_and_shows_aborted(tmp_path):
+    """action_kill_task must actually reach the running Popen and terminate() it,
+    and the run must then report as 'aborted' rather than succeeded/failed. Uses a
+    real background thread (like production's asyncio.to_thread) so the process is
+    genuinely still 'running' when ctrl+k fires, not already finished."""
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    class FakeProcess:
+        def __init__(self):
+            self.terminated = threading.Event()
+
+        def poll(self):
+            return None if not self.terminated.is_set() else 1
+
+        def terminate(self):
+            self.terminated.set()
+
+    fake_process = FakeProcess()
+
+    def fake_execute_task(module, task_name, output_dir, overrides, capture_output, on_output, on_process_start):
+        on_process_start(fake_process)
+        fake_process.terminated.wait(timeout=5)  # blocks here until action_kill_task() terminates it
+        return ExecutionResult(returncode=1, stdout="", stderr="")
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        task_node = select_task.tree.root.children[0].children[0]
+        await select_task_node(pilot, select_task, task_node)
+
+        with patch.object(app.engine, "execute_task", side_effect=fake_execute_task):
+            run_task = asyncio.ensure_future(app.action_execute_task())
+            await asyncio.sleep(0.2)  # let the worker thread reach on_process_start and block
+
+            assert app.current_process is fake_process
+            app.action_kill_task()
+            assert app.execution_cancelled is True
+
+            await run_task
+            await pilot.pause()
+
+        assert fake_process.terminated.is_set()
+        assert app.current_process is None
+
+        execute_panel = app.query_one(ExecuteTask)
+        assert "aborted" in str(execute_panel.status.content)
+        assert execute_panel.output_log.lines[-1] == "Task test_module/1_test_task, aborted"
+
+
+async def test_kill_task_does_nothing_when_no_task_is_running(tmp_path):
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        app.action_kill_task()  # must not raise
+        assert app.execution_cancelled is False
+
+
+async def test_execute_task_ignores_second_press_while_already_running(tmp_path):
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    class FakeProcess:
+        def poll(self):
+            return None  # still running
+
+    def fake_execute_task(module, task_name, output_dir, overrides, capture_output, on_output, on_process_start):
+        on_process_start(FakeProcess())
+        raise AssertionError("should not be called a second time while a run is in progress")
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        task_node = select_task.tree.root.children[0].children[0]
+        await select_task_node(pilot, select_task, task_node)
+
+        app.current_process = FakeProcess()  # simulate a run already in progress
+
+        with patch.object(app.engine, "execute_task", side_effect=fake_execute_task):
+            await app.action_execute_task()  # should return immediately, not call execute_task
+
+
+async def test_execute_task_panel_sub_title_toggles_with_run_lifecycle(tmp_path):
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        execute_panel = app.query_one(ExecuteTask)
+        assert app.sub_title == ""
+
+        execute_panel.start_running("Running test_module/1_test_task...")
+        assert app.sub_title == "Running test_module/1_test_task..."
+
+        execute_panel.show_result("test_module", "1_test_task", 0)
+        assert app.sub_title == ""
+        assert execute_panel.output_log.lines[-1] == "Task test_module/1_test_task, finished"
+
+        execute_panel.start_running("Running again...")
+        assert app.sub_title == "Running again..."
+
+        execute_panel.show_error("test_module", "1_test_task", "boom")
+        assert app.sub_title == ""
+
+
+async def test_sub_title_stays_visible_while_output_panel_is_toggled_off(tmp_path):
+    """The header sub-title is the one status signal that survives ctrl+o, so it must
+    still say 'Running...' even when the output panel itself is hidden in favor of
+    the browse view."""
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        execute_panel = app.query_one(ExecuteTask)
+
+        # Mirror what action_execute_task does before calling start_running:
+        # switch to the full-screen output view.
+        execute_panel.display = True
+        app.main_view.display = False
+        execute_panel.start_running("Running test_module/1_test_task...")
+        assert app.sub_title == "Running test_module/1_test_task..."
+
+        await pilot.press("ctrl+o")  # switch back to browsing mid-run
+        assert execute_panel.display is False
+        assert app.main_view.display is True
+        assert app.sub_title == "Running test_module/1_test_task..."  # still visible
+
+        execute_panel.show_result("test_module", "1_test_task", 0)
+        assert app.sub_title == ""
 
 
 async def test_toggle_output_binding_switches_between_fullscreen_and_hidden(tmp_path):
@@ -188,6 +353,41 @@ async def test_execute_task_reveals_hidden_output_panel_fullscreen(tmp_path):
         assert app.main_view.display is False
 
 
+async def test_rebuild_database_binding_rescans_code_directory(tmp_path):
+    write_db_with_one_task(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    # A new task script appears in Code_directory after the app has already started.
+    new_script = tmp_path / "new_script.R"
+    new_script.write_text(
+        '#@MODELFLOW_task name="2_new_task" module="new_module"\n'
+        'x <- 1\n',
+        encoding="utf-8",
+    )
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        assert "new_module" not in select_task.modules
+
+        await pilot.press("ctrl+b")
+        await pilot.pause()
+
+        assert "new_module" in select_task.modules
+        assert select_task.module_tasks["new_module"] == ["2_new_task"]
+
+        execute_panel = app.query_one(ExecuteTask)
+        assert execute_panel.display is True
+        assert app.main_view.display is False
+        assert "modules" in str(execute_panel.status.content)
+        assert app.sub_title == ""
+
+        db_content = json.loads((tmp_path / "model_flow.db.json").read_text(encoding="utf-8"))
+        assert "new_module" in db_content
+
+        # The ExecutionEngine's own (separate) Database instance must see the new task too.
+        assert app.engine.database.get_task("new_module", "2_new_task") is not None
+
+
 async def test_execute_task_shows_error_status_on_engine_failure(tmp_path):
     write_db_with_one_task(tmp_path)
     app = ModelFlowApp(make_config(tmp_path))
@@ -203,3 +403,4 @@ async def test_execute_task_shows_error_status_on_engine_failure(tmp_path):
 
         execute_panel = app.query_one(ExecuteTask)
         assert "failed to start" in str(execute_panel.status.content)
+        assert app.sub_title == ""
