@@ -2,12 +2,22 @@ import json
 from unittest.mock import patch
 
 import pytest
+from textual.widgets import Tree
 
 from classes.Config import Config
 from classes.ExecutionEngine import ExecutionResult
 from textual_gui.app import ExecuteTask, ModelFlowApp, ShowTask, SelectTask
 
 pytestmark = pytest.mark.asyncio
+
+
+async def select_task_node(pilot, select_task_widget, task_node):
+    """Simulate a real user selecting a tree node the way a click/Enter would:
+    post the actual Tree.NodeSelected message rather than calling
+    ModelFlowApp.select_task directly, so the on_tree_node_selected handler
+    (and whether it actually awaits the coroutine) is exercised for real."""
+    select_task_widget.tree.post_message(Tree.NodeSelected(task_node))
+    await pilot.pause()
 
 
 def make_config(tmp_path) -> Config:
@@ -85,8 +95,7 @@ async def test_selecting_task_populates_editable_config_with_default_value(tmp_p
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
         task_node = select_task.tree.root.children[0].children[0]
-        await app.select_task(task_node)
-        await pilot.pause()
+        await select_task_node(pilot, select_task, task_node)
 
         show_task = app.query_one(ShowTask)
         assert show_task.current_task["name"] == "1_test_task"
@@ -107,8 +116,7 @@ async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
         task_node = select_task.tree.root.children[0].children[0]
-        await app.select_task(task_node)
-        await pilot.pause()
+        await select_task_node(pilot, select_task, task_node)
 
         input_widget = app.query_one("#input-ext_par")
         input_widget.value = "99"
@@ -134,8 +142,7 @@ async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp
         assert user_data["test_module"][0]["config"][0]["script_value"] == ["99"]
 
         # Re-selecting the task should now offer the recorded value as a history option.
-        await app.select_task(task_node)
-        await pilot.pause()
+        await select_task_node(pilot, select_task, task_node)
         assert app.query_one("#select-ext_par") is not None
 
 
@@ -146,8 +153,7 @@ async def test_execute_task_shows_error_status_on_engine_failure(tmp_path):
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
         task_node = select_task.tree.root.children[0].children[0]
-        await app.select_task(task_node)
-        await pilot.pause()
+        await select_task_node(pilot, select_task, task_node)
 
         with patch.object(app.engine, "execute_task", side_effect=RuntimeError("boom")):
             await app.action_execute_task()

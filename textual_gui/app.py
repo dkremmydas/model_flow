@@ -88,10 +88,10 @@ class SelectTask(Widget):
                     module_node.add(task)
         root.expand()
 
-    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+    async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Handle tree node selection."""
         self.selected_node = event.node
-        self.modelflowapp.select_task(self.selected_node)
+        await self.modelflowapp.select_task(self.selected_node)
 
 
 
