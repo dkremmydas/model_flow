@@ -2,7 +2,7 @@ import asyncio
 import re
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static, Tree, Log, Select, Footer, Header, Input
 from textual.widget import Widget
 from textual.widgets.tree import TreeNode
@@ -150,6 +150,11 @@ class ShowTask(Widget):
     .param-select {
         width: 30%;
     }
+
+    .pipeline-task-header {
+        text-style: bold;
+        padding-top: 1;
+    }
     """
 
     def __init__(self, modelflowapp: "ModelFlowApp") -> None:
@@ -158,11 +163,16 @@ class ShowTask(Widget):
         self.modelflowapp = modelflowapp
         # Named task_tree/description_log (not tree/log) to avoid colliding with
         # Widget's own built-in `tree`/`log` devtools properties (no setter).
-        self.task_tree = Tree("Select a task", id="task-log")
+        self.task_tree = Tree("Select a Task or a Pipeline", id="task-log")
         self.description_log = Log(id="description")
         self.description_log.auto_scroll = False
-        self.config_editor = Vertical(id="config-editor")
+        self.config_editor = VerticalScroll(id="config-editor")
         self.current_task = None
+        # Set only while a pipeline (not a single task) is being shown: (module, pipeline_name).
+        self.current_pipeline = None
+        # widget_id (sans "input-" prefix) -> (task_name, script_name, default_value),
+        # populated by show_pipeline so on_input_submitted knows what/where to persist.
+        self.pipeline_param_defaults = {}
 
     def compose(self) -> ComposeResult:
         """Compose the layout of the application."""
@@ -176,9 +186,18 @@ class ShowTask(Widget):
         """Sanitize a script_name into a valid Textual widget id fragment."""
         return re.sub(r"[^a-zA-Z0-9_-]", "_", script_name)
 
+    @classmethod
+    def _pipeline_widget_id(cls, task_name: str, script_name: str) -> str:
+        """Sanitize a (task_name, script_name) pair into a unique widget id fragment --
+        a pipeline can list several tasks that each declare the same script_name, so
+        show_task's own bare `_param_widget_id(script_name)` isn't unique enough here."""
+        return "pipeline-" + cls._param_widget_id(f"{task_name}_{script_name}")
+
     async def show_task(self, task: dict) -> None:
         """Update the task in the ShowTask widget."""
         self.current_task = task
+        self.current_pipeline = None
+        self.pipeline_param_defaults = {}
 
         # Show the read-only task metadata (everything but config/description/module/name,
         # which are either shown elsewhere or duplicated in the root label below).
@@ -223,6 +242,84 @@ class ShowTask(Widget):
 
         if rows:
             await self.config_editor.mount(*rows)
+
+    async def show_pipeline(self, module: str, pipeline: dict) -> None:
+        """Update the right panel with a pipeline's ordered task list, and an editable
+        config form per task (mirrors show_task's per-parameter rows). There's no
+        separate "run" step for a pipeline yet to persist history after (unlike
+        show_task, whose overrides are recorded only once execution completes), so
+        edits are persisted to model_flow.db_user.json as soon as they're submitted
+        (see on_input_submitted)."""
+        self.current_task = None
+        self.current_pipeline = (module, pipeline.get("name"))
+        self.pipeline_param_defaults = {}
+
+        self.task_tree.clear()
+        pipeline_meta = {k: v for k, v in pipeline.items() if k not in ("description", "name")}
+        self.add_json(Text(f"{module}/{pipeline.get('name', '')} (pipeline)"), self.task_tree.root, pipeline_meta)
+        self.task_tree.root.expand()
+
+        self.description_log.clear()
+        self.description_log.write_line(pipeline.get("description", ""))
+        self.description_log.scroll_home(animate=False)
+
+        await self.config_editor.remove_children()
+        database = self.modelflowapp.database
+
+        sections = []
+        for task_name in pipeline.get("tasks", []):
+            task = database.get_task(module, task_name) if database else None
+            if not task:
+                continue
+
+            sections.append(Static(task_name, classes="pipeline-task-header"))
+            history = database.get_user_values(module, task_name) if database else {}
+
+            for param in task.get("config", []):
+                script_name = param.get("script_name")
+                if not script_name:
+                    continue
+                default_value = str(param.get("script_value", ""))
+                widget_id = self._pipeline_widget_id(task_name, script_name)
+                self.pipeline_param_defaults[widget_id] = (task_name, script_name, default_value)
+
+                row_children = [
+                    Static(f"{script_name} ({param.get('role', 'parameter')})", classes="param-label"),
+                    Input(value=default_value, id=f"input-{widget_id}", classes="param-input"),
+                ]
+                values = history.get(script_name, [])
+                if values:
+                    row_children.append(
+                        Select(
+                            [(value, value) for value in reversed(values)],
+                            id=f"select-{widget_id}",
+                            classes="param-select",
+                            allow_blank=True,
+                            prompt="History",
+                        )
+                    )
+                sections.append(Horizontal(*row_children, classes="param-row"))
+
+        if sections:
+            await self.config_editor.mount(*sections)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Persist a pipeline task's edited parameter to model_flow.db_user.json once
+        the user commits it (Enter) -- there's no separate "run" step for pipelines
+        to persist after, and persisting on every keystroke (Input.Changed) would
+        flood the history with partial edits."""
+        widget_id = event.input.id or ""
+        if not widget_id.startswith("input-pipeline-") or not self.current_pipeline:
+            return
+        meta = self.pipeline_param_defaults.get(widget_id[len("input-"):])
+        database = self.modelflowapp.database
+        if not meta or not database:
+            return
+        task_name, script_name, default_value = meta
+        if event.value == default_value:
+            return
+        module, _ = self.current_pipeline
+        database.add_user_value(module, task_name, script_name, event.value)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Fill a parameter's Input with the value picked from its history Select."""
@@ -468,25 +565,35 @@ class ModelFlowApp(App):
         yield Footer()
 
     async def select_task(self, node) -> None:
-        """Update the task in the ShowTask widget."""
-        # Tree shape is root("Modules") -> module -> "Tasks"/"Pipelines" -> leaf.
-        # Only a leaf under a "Tasks" group is an actual, runnable task; selecting
-        # a module node, a "Tasks"/"Pipelines" group node, or a pipeline leaf
-        # (pipeline execution/editing isn't wired into the GUI yet) is a no-op.
+        """Update the right panel (ShowTask) for the selected tree node.
+
+        Tree shape is root("Modules") -> module -> "Tasks"/"Pipelines" -> leaf.
+        Selecting a module node or a "Tasks"/"Pipelines" group node itself is a
+        no-op; a leaf under "Tasks" shows the editable task view, a leaf under
+        "Pipelines" shows the (read-only) pipeline's task list.
+        """
         parent = node.parent
-        if parent is None or parent.parent is None or str(parent.label) != "Tasks":
+        if parent is None or parent.parent is None:
             return
 
-        task_name = str(node.label)
+        group_label = str(parent.label)
         module_name = str(parent.parent.label)
-
-        task = self.database.get_task(module_name, task_name)
-        if not task:
-            return
-
-        self.selected_task = (module_name, task_name)
         show_task_widget = self.query_one("#show-task", ShowTask)
-        await show_task_widget.show_task(task)
+
+        if group_label == "Tasks":
+            task_name = str(node.label)
+            task = self.database.get_task(module_name, task_name)
+            if not task:
+                return
+            self.selected_task = (module_name, task_name)
+            await show_task_widget.show_task(task)
+        elif group_label == "Pipelines":
+            pipeline_name = str(node.label)
+            pipeline = self.database.get_pipeline(module_name, pipeline_name)
+            if not pipeline:
+                return
+            self.selected_task = None
+            await show_task_widget.show_pipeline(module_name, pipeline)
 
     def action_toggle_output(self) -> None:
         """Toggle the execution output panel between full-screen and hidden.
@@ -604,7 +711,7 @@ class ModelFlowApp(App):
         module_count = len(modules)
         task_count = sum(len(tasks) for tasks in modules.values())
         pipeline_count = sum(len(p) for p in pipelines.values())
-        self.execute_panel.output_log.write(f"\n\nDatabase rebuilt: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines")
+        self.execute_panel.output_log.write(f"Database rebuilt: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines")
         self.execute_panel.finish_running()
         self.execute_panel.set_status(
             f"Database rebuilt: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines"

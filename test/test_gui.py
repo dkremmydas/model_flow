@@ -4,7 +4,7 @@ import threading
 from unittest.mock import ANY, patch
 
 import pytest
-from textual.widgets import Tree
+from textual.widgets import Input, Tree
 
 from classes.Config import Config
 from classes.ExecutionEngine import ExecutionResult
@@ -59,6 +59,20 @@ def write_db_with_one_task(tmp_path):
     (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
 
 
+def write_db_with_one_task_and_pipeline(tmp_path):
+    write_db_with_one_task(tmp_path)
+    pipelines_content = {
+        "test_module": [
+            {
+                "name": "full_run",
+                "description": "Runs everything.",
+                "tasks": ["1_test_task"],
+            }
+        ]
+    }
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
+
+
 async def test_missing_database_shows_friendly_message(tmp_path):
     app = ModelFlowApp(make_config(tmp_path))  # no model_flow.db.json written
 
@@ -109,6 +123,65 @@ async def test_selecting_task_populates_editable_config_with_default_value(tmp_p
         input_widget.value = "99"
         await pilot.pause()
         assert show_task.get_overrides() == {"ext_par": "99"}
+
+
+async def test_selecting_pipeline_shows_its_tasks_in_right_panel(tmp_path):
+    write_db_with_one_task_and_pipeline(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        assert select_task.module_pipelines["test_module"] == ["full_run"]
+
+        module_node = select_task.tree.root.children[0]
+        pipelines_node = module_node.children[1]  # ["Tasks", "Pipelines"][1]
+        assert str(pipelines_node.label) == "Pipelines"
+        pipeline_node = pipelines_node.children[0]
+        await select_task_node(pilot, select_task, pipeline_node)
+
+        show_task = app.query_one(ShowTask)
+        assert show_task.current_task is None  # not an editable/runnable task
+        assert app.selected_task is None  # ctrl+r must not run a stale task selection
+
+        tree_labels = [str(n.label) for n in show_task.task_tree.root.children]
+        assert any("tasks" in label for label in tree_labels)
+        assert "1_test_task" in str(app.query_one(ShowTask).task_tree.root.children[-1].children[0].label)
+
+        assert "Runs everything." in show_task.description_log.lines
+
+
+async def test_editing_pipeline_task_param_persists_to_db_user_json_on_submit(tmp_path):
+    write_db_with_one_task_and_pipeline(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+    user_db_path = tmp_path / "model_flow.db_user.json"
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        pipeline_node = select_task.tree.root.children[0].children[1].children[0]
+        await select_task_node(pilot, select_task, pipeline_node)
+
+        input_widget = app.query_one("#input-pipeline-1_test_task_ext_par", Input)
+        assert input_widget.value == "5"
+
+        # Typing alone (Input.Changed) must not persist -- only a committed edit should.
+        input_widget.value = "42"
+        await pilot.pause()
+        assert not user_db_path.exists()
+
+        input_widget.post_message(Input.Submitted(input_widget, "42"))
+        await pilot.pause()
+
+        assert user_db_path.exists()
+        user_data = json.loads(user_db_path.read_text(encoding="utf-8"))
+        assert user_data["test_module"][0]["name"] == "1_test_task"
+        assert user_data["test_module"][0]["config"][0]["script_value"] == ["42"]
+
+        # Re-submitting the same (default) value is not a change -- nothing new recorded.
+        input_widget.value = "5"
+        input_widget.post_message(Input.Submitted(input_widget, "5"))
+        await pilot.pause()
+        user_data = json.loads(user_db_path.read_text(encoding="utf-8"))
+        assert user_data["test_module"][0]["config"][0]["script_value"] == ["42"]
 
 
 async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp_path):
