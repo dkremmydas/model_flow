@@ -73,6 +73,61 @@ def write_db_with_one_task_and_pipeline(tmp_path):
     (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
 
 
+def write_db_with_two_task_pipeline(tmp_path):
+    db_content = {
+        "test_module": [
+            {
+                "module": "test_module",
+                "file": "a.R",
+                "file_path": "C:\\scripts\\a.R",
+                "filetype": ".r",
+                "name": "task_a",
+                "description": "First task.",
+                "config": [
+                    {
+                        "name": "ext_par",
+                        "role": "parameter",
+                        "type": "number",
+                        "script_name": "ext_par",
+                        "script_value": "1",
+                    }
+                ],
+            },
+            {
+                "module": "test_module",
+                "file": "b.R",
+                "file_path": "C:\\scripts\\b.R",
+                "filetype": ".r",
+                "name": "task_b",
+                "description": "Second task.",
+                "config": [],
+            },
+        ]
+    }
+    (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+    pipelines_content = {
+        "test_module": [
+            {
+                "name": "full_run",
+                "description": "Runs everything.",
+                "tasks": ["task_a", "task_b"],
+            }
+        ]
+    }
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
+
+
+async def select_pipeline_node(pilot, select_task_widget, pipeline_name="full_run"):
+    """Find and select the given pipeline's tree node the way select_task_node does for tasks."""
+    for module_node in select_task_widget.tree.root.children:
+        pipelines_node = module_node.children[1]  # ["Tasks", "Pipelines"][1]
+        for pipeline_node in pipelines_node.children:
+            if str(pipeline_node.label) == pipeline_name:
+                await select_task_node(pilot, select_task_widget, pipeline_node)
+                return
+    raise AssertionError(f"pipeline '{pipeline_name}' not found in tree")
+
+
 async def test_missing_database_shows_friendly_message(tmp_path):
     app = ModelFlowApp(make_config(tmp_path))  # no model_flow.db.json written
 
@@ -182,6 +237,114 @@ async def test_editing_pipeline_task_param_persists_to_db_user_json_on_submit(tm
         await pilot.pause()
         user_data = json.loads(user_db_path.read_text(encoding="utf-8"))
         assert user_data["test_module"][0]["config"][0]["script_value"] == ["42"]
+
+
+async def test_execute_pipeline_runs_tasks_in_order_with_overrides_and_persists_history(tmp_path):
+    write_db_with_two_task_pipeline(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        await select_pipeline_node(pilot, select_task)
+        assert app.selected_pipeline == ("test_module", "full_run")
+        assert app.selected_task is None
+
+        input_widget = app.query_one("#input-pipeline-task_a_ext_par", Input)
+        input_widget.value = "99"
+        await pilot.pause()
+
+        calls = []
+
+        def fake_execute_task(module, task_name, output_dir, overrides, capture_output, on_output, on_process_start):
+            calls.append((module, task_name, overrides))
+            return ExecutionResult(returncode=0, stdout=f"ran {task_name}", stderr="")
+
+        with patch.object(app.engine, "execute_task", side_effect=fake_execute_task) as mock_execute:
+            await app.action_execute_task()
+            await pilot.pause()
+
+        assert calls == [
+            ("test_module", "task_a", {"ext_par": "99"}),
+            ("test_module", "task_b", {}),
+        ]
+        assert mock_execute.call_count == 2
+
+        execute_panel = app.query_one(ExecuteTask)
+        assert "succeeded" in str(execute_panel.status.content)
+        assert "2 tasks" in str(execute_panel.status.content)
+
+        user_db_path = tmp_path / "model_flow.db_user.json"
+        assert user_db_path.exists()
+        user_data = json.loads(user_db_path.read_text(encoding="utf-8"))
+        assert user_data["test_module"][0]["name"] == "task_a"
+        assert user_data["test_module"][0]["config"][0]["script_value"] == ["99"]
+
+
+async def test_execute_pipeline_stops_after_first_failing_task(tmp_path):
+    write_db_with_two_task_pipeline(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        await select_pipeline_node(pilot, select_task)
+
+        calls = []
+
+        def fake_execute_task(module, task_name, output_dir, overrides, capture_output, on_output, on_process_start):
+            calls.append(task_name)
+            return ExecutionResult(returncode=1, stdout="", stderr="boom")
+
+        with patch.object(app.engine, "execute_task", side_effect=fake_execute_task):
+            await app.action_execute_task()
+            await pilot.pause()
+
+        # task_b must never run once task_a fails.
+        assert calls == ["task_a"]
+
+        execute_panel = app.query_one(ExecuteTask)
+        assert "failed at task_a" in str(execute_panel.status.content)
+        assert "Remaining tasks not run" in execute_panel.output_log.lines[-1]
+
+
+async def test_execute_pipeline_can_be_aborted_via_ctrl_k(tmp_path):
+    write_db_with_two_task_pipeline(tmp_path)
+    app = ModelFlowApp(make_config(tmp_path))
+
+    class FakeProcess:
+        def __init__(self):
+            self.terminated = threading.Event()
+
+        def poll(self):
+            return None if not self.terminated.is_set() else 1
+
+        def terminate(self):
+            self.terminated.set()
+
+    fake_process = FakeProcess()
+
+    def fake_execute_task(module, task_name, output_dir, overrides, capture_output, on_output, on_process_start):
+        on_process_start(fake_process)
+        fake_process.terminated.wait(timeout=5)
+        return ExecutionResult(returncode=1, stdout="", stderr="")
+
+    async with app.run_test() as pilot:
+        select_task = app.query_one(SelectTask)
+        await select_pipeline_node(pilot, select_task)
+
+        with patch.object(app.engine, "execute_task", side_effect=fake_execute_task) as mock_execute:
+            run_task = asyncio.ensure_future(app.action_execute_task())
+            await asyncio.sleep(0.2)
+
+            app.action_kill_task()
+            await run_task
+            await pilot.pause()
+
+        # Aborted mid-first-task -- task_b must never have been reached.
+        assert mock_execute.call_count == 1
+        assert app.current_process is None
+
+        execute_panel = app.query_one(ExecuteTask)
+        assert "aborted" in str(execute_panel.status.content)
 
 
 async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp_path):

@@ -349,6 +349,23 @@ class ShowTask(Widget):
                 overrides[script_name] = value
         return overrides
 
+    def get_pipeline_overrides(self) -> dict:
+        """Return {task_name: {script_name: value}} for pipeline-task parameters whose
+        Input differs from that task's default. Mirrors get_overrides, but keyed per
+        task since show_pipeline renders one editable form per task in the pipeline."""
+        overrides: dict = {}
+        if not self.current_pipeline:
+            return overrides
+        for widget_id, (task_name, script_name, default_value) in self.pipeline_param_defaults.items():
+            try:
+                input_widget = self.query_one(f"#input-{widget_id}", Input)
+            except Exception:
+                continue
+            value = input_widget.value
+            if value != default_value:
+                overrides.setdefault(task_name, {})[script_name] = value
+        return overrides
+
     @classmethod
     def add_json(cls, root_name, node: TreeNode, json_data: object) -> None:
         """Adds JSON data to a node.
@@ -441,6 +458,15 @@ class ExecuteTask(Widget):
             self.app.sub_title = message
         self.output_log.clear()
 
+    def announce_step(self, message: str) -> None:
+        """Update status/sub-title mid-run without clearing the output log -- used
+        between steps of a multi-task pipeline run, where each task's output should
+        accumulate in the same log rather than being wiped like start_running does
+        for a single task run."""
+        self.set_status(message)
+        if self.app:
+            self.app.sub_title = message
+
     def append_output(self, line: str) -> None:
         """Append one line of live-streamed subprocess output. Must only be called
         from the UI thread -- callers driving execution from a worker thread
@@ -505,8 +531,8 @@ class ModelFlowApp(App):
 
     BINDINGS = [
         ("escape", "quit", "Quit"),
-        ("ctrl+r", "execute_task", "Execute Task"),
-        ("ctrl+k", "kill_task", "Abort Task"),
+        ("ctrl+r", "execute_task", "Execute Task/Pipeline"),
+        ("ctrl+k", "kill_task", "Abort"),
         ("ctrl+o", "toggle_output", "Toggle Output"),
         ("ctrl+b", "rebuild_database", "Rebuild DB"),
     ]
@@ -522,6 +548,7 @@ class ModelFlowApp(App):
         self.execute_panel = None
         self.main_view = None
         self.selected_task = None  # (module, task_name) of the currently selected task
+        self.selected_pipeline = None  # (module, pipeline_name) of the currently selected pipeline
         self.startup_error = None
         self.current_process = None  # subprocess.Popen of the task currently running, if any
         self.execution_cancelled = False  # set just before terminating current_process
@@ -569,8 +596,9 @@ class ModelFlowApp(App):
 
         Tree shape is root("Modules") -> module -> "Tasks"/"Pipelines" -> leaf.
         Selecting a module node or a "Tasks"/"Pipelines" group node itself is a
-        no-op; a leaf under "Tasks" shows the editable task view, a leaf under
-        "Pipelines" shows the (read-only) pipeline's task list.
+        no-op; a leaf under "Tasks" shows the editable task view (and arms ctrl+r
+        to run that one task), a leaf under "Pipelines" shows the pipeline's
+        editable per-task forms (and arms ctrl+r to run the whole pipeline).
         """
         parent = node.parent
         if parent is None or parent.parent is None:
@@ -586,6 +614,7 @@ class ModelFlowApp(App):
             if not task:
                 return
             self.selected_task = (module_name, task_name)
+            self.selected_pipeline = None
             await show_task_widget.show_task(task)
         elif group_label == "Pipelines":
             pipeline_name = str(node.label)
@@ -593,6 +622,7 @@ class ModelFlowApp(App):
             if not pipeline:
                 return
             self.selected_task = None
+            self.selected_pipeline = (module_name, pipeline_name)
             await show_task_widget.show_pipeline(module_name, pipeline)
 
     def action_toggle_output(self) -> None:
@@ -609,6 +639,13 @@ class ModelFlowApp(App):
         self.main_view.display = not show_output
 
     async def action_execute_task(self) -> None:
+        """Execute the currently selected task or pipeline (ctrl+r)."""
+        if self.selected_task:
+            await self._execute_selected_task()
+        elif self.selected_pipeline:
+            await self._execute_selected_pipeline()
+
+    async def _execute_selected_task(self) -> None:
         """Execute the currently selected task with any user-edited parameter overrides."""
         if not self.database or not self.engine or not self.selected_task or not self.execute_panel:
             return
@@ -663,6 +700,101 @@ class ModelFlowApp(App):
 
         for script_name, value in overrides.items():
             self.database.add_user_value(module, task_name, script_name, value)
+
+    async def _execute_selected_pipeline(self) -> None:
+        """Execute every task in the currently selected pipeline, sequentially, in
+        declared order, stopping at the first task that fails -- mirrors the CLI's
+        run_pipeline semantics (model_flow.py's run_pipeline). Unlike a single-task
+        run, the output log is cleared once at the start and then accumulates every
+        task's streamed output in turn (announce_step updates the status/sub-title
+        between tasks without wiping that log)."""
+        if not self.database or not self.engine or not self.selected_pipeline or not self.execute_panel:
+            return
+        if self.current_process is not None and self.current_process.poll() is None:
+            return  # a task is already running -- ctrl+k aborts it first
+
+        module, pipeline_name = self.selected_pipeline
+        pipeline = self.database.get_pipeline(module, pipeline_name)
+        if not pipeline:
+            return
+        task_names = pipeline.get("tasks", [])
+
+        show_task_widget = self.query_one("#show-task", ShowTask)
+        pipeline_overrides = show_task_widget.get_pipeline_overrides()
+
+        self.execute_panel.display = True
+        if self.main_view:
+            self.main_view.display = False
+        self.execution_cancelled = False
+        self.execute_panel.output_log.clear()
+        self.execute_panel.announce_step(f"Running pipeline {module}/{pipeline_name}... (ctrl+k to abort)")
+
+        # Give action_kill_task something to terminate() -- safe to call from another
+        # thread than the one reading the process's output.
+        def on_process_start(process) -> None:
+            self.current_process = process
+
+        for index, task_name in enumerate(task_names, start=1):
+            overrides = pipeline_overrides.get(task_name, {})
+            step = f"[{index}/{len(task_names)}]"
+            self.execute_panel.announce_step(
+                f"Running pipeline {module}/{pipeline_name} {step}: {task_name}... (ctrl+k to abort)"
+            )
+            self.execute_panel.output_log.write_line(f"=== {step} {task_name} ===")
+
+            def on_output(line: str) -> None:
+                self.call_from_thread(self.execute_panel.append_output, line)
+
+            try:
+                result = await asyncio.to_thread(
+                    self.engine.execute_task,
+                    module,
+                    task_name,
+                    None,
+                    overrides,
+                    True,
+                    on_output,
+                    on_process_start,
+                )
+            except Exception as e:
+                self.current_process = None
+                self.execute_panel.finish_running()
+                if self.execution_cancelled:
+                    self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, aborted at {task_name}")
+                    self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} aborted")
+                else:
+                    self.execute_panel.output_log.write_line(f"Task {task_name} failed to start: {e}")
+                    self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} failed to start task {task_name}: {e}")
+                return
+
+            self.current_process = None
+
+            for script_name, value in overrides.items():
+                self.database.add_user_value(module, task_name, script_name, value)
+
+            if self.execution_cancelled:
+                self.execute_panel.finish_running()
+                self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, aborted at {task_name}")
+                self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} aborted")
+                return
+
+            returncode = result.returncode
+            self.execute_panel.output_log.write_line(f"Task {module}/{task_name}, finished (exit {returncode})")
+
+            if returncode != 0:
+                self.execute_panel.finish_running()
+                self.execute_panel.output_log.write_line(
+                    f"Pipeline {module}/{pipeline_name} stopped: task '{task_name}' {step} "
+                    f"failed (exit {returncode}). Remaining tasks not run."
+                )
+                self.execute_panel.set_status(
+                    f"Pipeline {module}/{pipeline_name} failed at {task_name} (exit {returncode})"
+                )
+                return
+
+        self.execute_panel.finish_running()
+        self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, finished")
+        self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} succeeded ({len(task_names)} tasks)")
 
     def action_kill_task(self) -> None:
         """Abort the currently running task, if any."""
