@@ -52,12 +52,17 @@ class Parser:
         return values
 
     @staticmethod
-    def parse_modules(directory: str) -> Dict:
+    def parse_modules(directory: str, on_file=None) -> Dict:
         """
         Recursively parse modules and tasks from the given directory.
 
         Args:
             directory: The root directory to parse.
+            on_file: Optional callback invoked with the path of each candidate
+                script file (matching allowed_extensions) as it's scanned, for
+                surfacing verbose progress to a caller (e.g. the GUI's rebuild
+                action) -- independent of the `logging` calls below, which go
+                to the log handlers configured by the CLI, not the GUI.
 
         Returns:
             A dictionary containing parsed modules and tasks.
@@ -85,6 +90,8 @@ class Parser:
                     file_ext = os.path.splitext(file)[1].lower()
                     if file_ext in allowed_extensions:
                         file_path = Path(root) / file
+                        if on_file:
+                            on_file(str(file_path))
 
                         try:
                             task = Task(str(file_path))
@@ -120,7 +127,7 @@ class Parser:
             raise
 
     @staticmethod
-    def parse_pipelines(directory: str, modules: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
+    def parse_pipelines(directory: str, modules: Dict[str, List[Dict]], on_file=None) -> Dict[str, List[Dict]]:
         """
         Recursively scan `directory` for per-module model_flow.pipelines.json files,
         validate each declared pipeline's task list against `modules` (the dict
@@ -131,6 +138,8 @@ class Parser:
             directory: same root directory passed to parse_modules.
             modules: output of parse_modules(directory) -- used to validate that
                 every task name referenced by a pipeline exists in that same module.
+            on_file: Optional callback invoked with the path of each
+                model_flow.pipelines.json file found, as it's scanned.
 
         Returns:
             Dict[str, List[Dict]]: {module_name: [{"name", "description", "tasks"}, ...]}
@@ -153,6 +162,8 @@ class Parser:
                 continue
 
             file_path = Path(root) / Parser.pipelines_filename
+            if on_file:
+                on_file(str(file_path))
 
             try:
                 with open(file_path, "r", encoding="utf-8") as f:

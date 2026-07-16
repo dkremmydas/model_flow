@@ -566,7 +566,8 @@ class ModelFlowApp(App):
         self.current_process.terminate()
 
     async def action_rebuild_database(self) -> None:
-        """Rescan Code_directory, regenerate model_flow.db.json, and refresh the browse view."""
+        """Rescan Code_directory, regenerate model_flow.db.json/model_flow.pipelines.json,
+        and refresh the browse view."""
         if not self.database or not self.engine or not self.execute_panel:
             return
 
@@ -578,8 +579,15 @@ class ModelFlowApp(App):
 
         code_directory = self.config.get("Code_directory")
 
+        # parse_modules/parse_pipelines run on a worker thread, so each on_file
+        # callback must marshal back to the UI thread via call_from_thread, same
+        # as ExecutionEngine's on_output during task execution.
+        def on_file(path: str) -> None:
+            self.call_from_thread(self.execute_panel.append_output, f"Scanning: {path}")
+
         try:
-            modules = await asyncio.to_thread(Parser.parse_modules, code_directory)
+            modules = await asyncio.to_thread(Parser.parse_modules, code_directory, on_file)
+            pipelines = await asyncio.to_thread(Parser.parse_pipelines, code_directory, modules, on_file)
         except Exception as e:
             self.execute_panel.show_error("build", "model_flow.db.json", str(e))
             return
@@ -588,13 +596,19 @@ class ModelFlowApp(App):
         # so subsequent executions use the freshly-scanned tasks too.
         self.database.data = modules
         self.database.save()
+        self.database.pipelines_data = pipelines
+        self.database.save_pipelines()
         self.engine.database.data = modules
+        self.engine.database.pipelines_data = pipelines
 
         module_count = len(modules)
         task_count = sum(len(tasks) for tasks in modules.values())
-        self.execute_panel.output_log.write(f"Scanned: {code_directory}\n")
+        pipeline_count = sum(len(p) for p in pipelines.values())
+        self.execute_panel.output_log.write(f"\n\nDatabase rebuilt: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines")
         self.execute_panel.finish_running()
-        self.execute_panel.set_status(f"Database rebuilt: {module_count} modules, {task_count} tasks")
+        self.execute_panel.set_status(
+            f"Database rebuilt: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines"
+        )
 
         self.query_one(SelectTask).refresh_from_database()
 
