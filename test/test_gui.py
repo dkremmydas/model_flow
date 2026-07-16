@@ -593,17 +593,23 @@ async def test_rebuild_database_binding_rescans_code_directory(tmp_path):
     write_db_with_one_task(tmp_path)
     app = ModelFlowApp(make_config(tmp_path))
 
-    # A new task script appears in Code_directory after the app has already started.
+    # A new task script and a lists source file appear in Code_directory after
+    # the app has already started.
     new_script = tmp_path / "new_script.R"
     new_script.write_text(
         '#@MODELFLOW_task name="2_new_task" module="new_module"\n'
         'x <- 1\n',
         encoding="utf-8",
     )
+    (tmp_path / "model_flow.lists.json").write_text(
+        json.dumps({"lists": [{"name": "nuts0", "type": "string", "elements": ["AT", "BE"]}]}),
+        encoding="utf-8",
+    )
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
         assert "new_module" not in select_task.modules
+        assert app.lists.list_names() == []
 
         await pilot.press("ctrl+b")
         await pilot.pause()
@@ -615,10 +621,17 @@ async def test_rebuild_database_binding_rescans_code_directory(tmp_path):
         assert execute_panel.display is True
         assert app.main_view.display is False
         assert "modules" in str(execute_panel.status.content)
+        assert "1 lists" in str(execute_panel.status.content)
         assert app.sub_title == ""
 
         db_content = json.loads((tmp_path / "model_flow.db.json").read_text(encoding="utf-8"))
         assert "new_module" in db_content
+
+        assert app.lists.list_names() == ["nuts0"]
+        assert app.lists.get_elements("nuts0") == ["AT", "BE"]
+        lists_content = json.loads((tmp_path / "model_flow.lists.json").read_text(encoding="utf-8"))
+        assert lists_content["lists"][0]["name"] == "nuts0"
+        assert lists_content["lists"][0]["folder"] == "."
 
         # The ExecutionEngine's own (separate) Database instance must see the new task too.
         assert app.engine.database.get_task("new_module", "2_new_task") is not None

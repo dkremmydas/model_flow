@@ -55,6 +55,7 @@ def build(config: Config) -> None:
         from classes.Parser import Parser  # Import the Parser class
         modules = Parser.parse_modules(str(code_dir))  # Use the Parser's parse_modules method
         pipelines = Parser.parse_pipelines(str(code_dir), modules)
+        lists = Parser.parse_lists(str(code_dir))
 
         output_file = db_dir / "model_flow.db.json"
 
@@ -66,13 +67,20 @@ def build(config: Config) -> None:
         with open(pipelines_output_file, 'w', encoding='utf-8') as f:
             json.dump(pipelines, f, indent=4, ensure_ascii=False)
 
+        lists_output_file = db_dir / "model_flow.lists.json"
+
+        with open(lists_output_file, 'w', encoding='utf-8') as f:
+            json.dump({"lists": list(lists.values())}, f, indent=4, ensure_ascii=False)
+
         # Detailed success message
         module_count = len(modules)
         task_count = sum(len(tasks) for tasks in modules.values())
         pipeline_count = sum(len(p) for p in pipelines.values())
+        list_count = len(lists)
         logger.info(
             f"Build successful! Database saved to {output_file}\n"
-            f"Summary: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines"
+            f"Summary: {module_count} modules, {task_count} tasks, "
+            f"{pipeline_count} pipelines, {list_count} lists"
         )
         
     except Exception as e:

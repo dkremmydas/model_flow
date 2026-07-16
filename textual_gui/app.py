@@ -12,6 +12,7 @@ from rich.text import Text
 from classes.Config import Config
 from classes.Database import Database
 from classes.ExecutionEngine import ExecutionEngine, ExecutionResult
+from classes.Lists import Lists
 from classes.Parser import Parser
 from classes.Task import Task
 
@@ -545,6 +546,7 @@ class ModelFlowApp(App):
         self.config = config  # Store the configuration if needed
         self.database = None
         self.engine = None
+        self.lists = None
         self.execute_panel = None
         self.main_view = None
         self.selected_task = None  # (module, task_name) of the currently selected task
@@ -556,6 +558,7 @@ class ModelFlowApp(App):
         try:
             self.database = Database(self.config)
             self.engine = ExecutionEngine(self.config)
+            self.lists = Lists(self.config)
         except FileNotFoundError as e:
             self.startup_error = str(e)
 
@@ -805,9 +808,9 @@ class ModelFlowApp(App):
         self.current_process.terminate()
 
     async def action_rebuild_database(self) -> None:
-        """Rescan Code_directory, regenerate model_flow.db.json/model_flow.pipelines.json,
-        and refresh the browse view."""
-        if not self.database or not self.engine or not self.execute_panel:
+        """Rescan Code_directory, regenerate model_flow.db.json/model_flow.pipelines.json/
+        model_flow.lists.json, and refresh the browse view."""
+        if not self.database or not self.engine or not self.lists or not self.execute_panel:
             return
 
         self.execute_panel.display = True
@@ -818,36 +821,43 @@ class ModelFlowApp(App):
 
         code_directory = self.config.get("Code_directory")
 
-        # parse_modules/parse_pipelines run on a worker thread, so each on_file
-        # callback must marshal back to the UI thread via call_from_thread, same
-        # as ExecutionEngine's on_output during task execution.
+        # parse_modules/parse_pipelines/parse_lists run on a worker thread, so each
+        # on_file callback must marshal back to the UI thread via call_from_thread,
+        # same as ExecutionEngine's on_output during task execution.
         def on_file(path: str) -> None:
             self.call_from_thread(self.execute_panel.append_output, f"Scanning: {path}")
 
         try:
             modules = await asyncio.to_thread(Parser.parse_modules, code_directory, on_file)
             pipelines = await asyncio.to_thread(Parser.parse_pipelines, code_directory, modules, on_file)
+            lists = await asyncio.to_thread(Parser.parse_lists, code_directory, on_file)
         except Exception as e:
             self.execute_panel.show_error("build", "model_flow.db.json", str(e))
             return
 
-        # Update both this app's Database and the ExecutionEngine's own (separate) instance,
-        # so subsequent executions use the freshly-scanned tasks too.
+        # Update both this app's Database/Lists and the ExecutionEngine's own
+        # (separate) Database instance, so subsequent executions use the
+        # freshly-scanned tasks too.
         self.database.data = modules
         self.database.save()
         self.database.pipelines_data = pipelines
         self.database.save_pipelines()
+        self.lists.lists_data = lists
+        self.lists.save()
         self.engine.database.data = modules
         self.engine.database.pipelines_data = pipelines
 
         module_count = len(modules)
         task_count = sum(len(tasks) for tasks in modules.values())
         pipeline_count = sum(len(p) for p in pipelines.values())
-        self.execute_panel.output_log.write(f"Database rebuilt: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines")
-        self.execute_panel.finish_running()
-        self.execute_panel.set_status(
-            f"Database rebuilt: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines"
+        list_count = len(lists)
+        summary = (
+            f"Database rebuilt: {module_count} modules, {task_count} tasks, "
+            f"{pipeline_count} pipelines, {list_count} lists"
         )
+        self.execute_panel.output_log.write("\n\n"+summary)
+        self.execute_panel.finish_running()
+        self.execute_panel.set_status(summary)
 
         self.query_one(SelectTask).refresh_from_database()
 

@@ -123,7 +123,7 @@ Pipelines are declared, per module, in a `model_flow.pipelines.json` file placed
 
 A List is a named, ordered collection of values — e.g. the set of NUTS0 country codes or NUTS2 region codes used across a CAP model — kept in one place so scripts/parameters can reference it by name instead of every task repeating (and risking drifting copies of) the same values.
 
-Unlike tasks and pipelines, lists aren't discovered by scanning `Code_directory` — there's no script annotation for them. Instead, there is a single `model_flow.lists.json` at the root of `Code_directory`, holding the default/mainstream lists that ship with the model:
+Unlike tasks and pipelines, lists aren't scanned via a script annotation — there's no task/module involved. Instead, a `model_flow.lists.json` file can be placed in **any** folder of `Code_directory` (not just the root, and not one-per-module either — a folder either has one or it doesn't):
 
 ```json
 {
@@ -133,23 +133,19 @@ Unlike tasks and pipelines, lists aren't discovered by scanning `Code_directory`
       "type": "string",
       "description": "EU27 member state codes (NUTS level 0).",
       "elements": ["AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "EL", "ES", "..."]
-    },
-    {
-      "name": "nuts2",
-      "type": "string",
-      "description": "NUTS level 2 region codes.",
-      "elements": ["AT11", "AT12", "AT13", "AT21", "AT22", "..."]
     }
   ]
 }
 ```
 
-- `name` — the list's identifier.
+- `name` — the list's identifier (must be unique across the whole `Code_directory` tree — a duplicate found in another folder is dropped with a warning, first-seen wins).
 - `type` — `string` or `number`; the type of every entry in `elements`.
 - `elements` — the ordered list of values.
 - `description` — optional free text.
 
-`model_flow.lists_user.json`, in `Database_directory` (not `Code_directory`), is where each user defines their own lists, without editing the shared, model-wide source file. It's optional and only needs to exist once something has actually been added to it.
+`model_flow build` (`Parser.parse_lists`) walks every folder of `Code_directory` looking for a `model_flow.lists.json`, collects every list it declares, tags each one with the folder it was found in (relative to `Code_directory`, forward slashes, `"."` for the root itself), and writes the aggregated result to `model_flow.lists.json` in `Database_directory` — mirroring how `model_flow.db.json`/`model_flow.pipelines.json` are themselves build-generated, not hand-maintained in `Database_directory` directly. For example, a list declared in `Code_directory/v.main2020/d.policy/model_flow.lists.json` ends up in the aggregated file as `{"name": "nuts2", ..., "folder": "v.main2020/d.policy"}`.
+
+`model_flow.lists_user.json`, also in `Database_directory`, is where each user defines their own lists, without touching the build-generated source file. It's optional and only needs to exist once something has actually been added to it.
 
 (Lists are a reference/lookup mechanism, not yet read by any `model_flow` command — this is groundwork for future features that consume named value sets, e.g. driving a task or pipeline once per element.)
 

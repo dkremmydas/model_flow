@@ -24,6 +24,10 @@ def write_pipelines_file(folder, module, pipelines, filename="model_flow.pipelin
     write(folder, filename, content=json.dumps({"module": module, "pipelines": pipelines}))
 
 
+def write_lists_file(folder, lists, filename="model_flow.lists.json"):
+    write(folder, filename, content=json.dumps({"lists": lists}))
+
+
 def test_parse_pipelines_returns_empty_dict_when_no_pipelines_files(tmp_path):
     write_task(tmp_path, name="1_task")
     modules = Parser.parse_modules(str(tmp_path))
@@ -139,3 +143,85 @@ def test_parse_pipelines_skips_malformed_json_without_aborting_walk(tmp_path):
             {"name": "run_all", "description": "", "tasks": ["2_task"]},
         ]
     }
+
+
+def test_parse_lists_returns_empty_dict_when_no_lists_files(tmp_path):
+    assert Parser.parse_lists(str(tmp_path)) == {}
+
+
+def test_parse_lists_discovers_list_file_at_root_with_folder_dot(tmp_path):
+    write_lists_file(tmp_path, [{"name": "nuts0", "type": "string", "elements": ["AT", "BE"]}])
+
+    lists = Parser.parse_lists(str(tmp_path))
+
+    assert lists == {
+        "nuts0": {"name": "nuts0", "type": "string", "elements": ["AT", "BE"], "folder": "."},
+    }
+
+
+def test_parse_lists_discovers_list_file_in_nested_folder_with_relative_path(tmp_path):
+    write_lists_file(tmp_path / "v.main2020" / "d.policy", [
+        {"name": "nuts2", "type": "string", "elements": ["AT11", "AT12"]},
+    ])
+
+    lists = Parser.parse_lists(str(tmp_path))
+
+    assert lists["nuts2"]["folder"] == "v.main2020/d.policy"
+    assert lists["nuts2"]["elements"] == ["AT11", "AT12"]
+
+
+def test_parse_lists_collects_from_multiple_folders(tmp_path):
+    write_lists_file(tmp_path / "a", [{"name": "list_a", "elements": ["1"]}])
+    write_lists_file(tmp_path / "b", [{"name": "list_b", "elements": ["2"]}])
+
+    lists = Parser.parse_lists(str(tmp_path))
+
+    assert set(lists.keys()) == {"list_a", "list_b"}
+    assert lists["list_a"]["folder"] == "a"
+    assert lists["list_b"]["folder"] == "b"
+
+
+def test_parse_lists_skips_unnamed_list(tmp_path, caplog):
+    write_lists_file(tmp_path, [{"elements": ["AT"]}])
+
+    with caplog.at_level(logging.WARNING):
+        lists = Parser.parse_lists(str(tmp_path))
+
+    assert lists == {}
+    assert "unnamed" in caplog.text.lower()
+
+
+def test_parse_lists_skips_duplicate_name_across_folders(tmp_path, caplog):
+    write_lists_file(tmp_path / "a", [{"name": "nuts0", "elements": ["AT"]}])
+    write_lists_file(tmp_path / "b", [{"name": "nuts0", "elements": ["BE"]}])
+
+    with caplog.at_level(logging.WARNING):
+        lists = Parser.parse_lists(str(tmp_path))
+
+    # first-seen wins; os.walk's traversal order across sibling folders isn't
+    # guaranteed, so only assert dedup happened, not which folder "won".
+    assert len(lists) == 1
+    assert lists["nuts0"]["elements"] in (["AT"], ["BE"])
+    assert "duplicate" in caplog.text.lower()
+
+
+def test_parse_lists_skips_malformed_json_without_aborting_walk(tmp_path):
+    write(tmp_path / "a", "model_flow.lists.json", content="{not valid json")
+    write_lists_file(tmp_path / "b", [{"name": "nuts0", "elements": ["AT"]}])
+
+    lists = Parser.parse_lists(str(tmp_path))
+
+    assert lists == {
+        "nuts0": {"name": "nuts0", "elements": ["AT"], "folder": "b"},
+    }
+
+
+def test_parse_lists_on_file_callback_invoked_per_lists_file(tmp_path):
+    write_lists_file(tmp_path / "a", [{"name": "list_a", "elements": ["1"]}])
+    write_lists_file(tmp_path / "b", [{"name": "list_b", "elements": ["2"]}])
+
+    seen = []
+    Parser.parse_lists(str(tmp_path), on_file=seen.append)
+
+    assert len(seen) == 2
+    assert all(path.endswith("model_flow.lists.json") for path in seen)

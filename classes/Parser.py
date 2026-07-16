@@ -17,6 +17,7 @@ class Parser:
     allowed_extensions = {".r", ".rmd", ".gms", ".bat"}
     ignore_dirs = {".git", ".vscode", ".svn", "__pycache__", "venv"}
     pipelines_filename = "model_flow.pipelines.json"
+    lists_filename = "model_flow.lists.json"
 
     @staticmethod
     def parse_range_args(range_args: Optional[List[List[str]]]) -> Dict[str, List[float]]:
@@ -210,3 +211,67 @@ class Parser:
 
         logger.info(f"Found {sum(len(v) for v in pipelines.values())} pipelines across {len(pipelines)} modules")
         return pipelines
+
+    @staticmethod
+    def parse_lists(directory: str, on_file=None) -> Dict[str, Dict]:
+        """
+        Recursively scan `directory` for model_flow.lists.json files -- unlike
+        pipelines, these aren't tied to a module, so a list-defining file can sit
+        in *any* folder of `directory`, not just its root. Every list collected is
+        tagged with the folder it was found in (relative to `directory`, forward
+        slashes, "." for the root itself) so that provenance survives once every
+        file's lists are merged into one aggregated dict.
+
+        Args:
+            directory: same root directory passed to parse_modules.
+            on_file: Optional callback invoked with the path of each
+                model_flow.lists.json file found, as it's scanned.
+
+        Returns:
+            Dict[str, Dict]: {list_name: {"name", "type", "elements", "description", "folder"}}
+
+        Raises:
+            FileNotFoundError: If the directory doesn't exist.
+        """
+        ignore_dirs = Parser.ignore_dirs
+        lists: Dict[str, Dict] = {}
+
+        root_path = Path(directory).resolve()
+        if not root_path.is_dir():
+            raise FileNotFoundError(f"Directory not found: {directory}")
+
+        for root, dirs, files in os.walk(root_path):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+
+            if Parser.lists_filename not in files:
+                continue
+
+            file_path = Path(root) / Parser.lists_filename
+            if on_file:
+                on_file(str(file_path))
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Skipping malformed lists file {file_path}: {e}")
+                continue
+
+            folder = Path(os.path.relpath(root, root_path)).as_posix()
+
+            for entry in raw.get("lists", []):
+                name = entry.get("name")
+                if not name:
+                    logger.warning(f"Skipping unnamed list in {file_path}")
+                    continue
+                if name in lists:
+                    logger.warning(
+                        f"Skipping duplicate list '{name}' in {file_path} "
+                        f"(already declared in folder '{lists[name]['folder']}')"
+                    )
+                    continue
+
+                lists[name] = {**entry, "name": name, "folder": folder}
+
+        logger.info(f"Found {len(lists)} lists across {directory}")
+        return lists

@@ -10,14 +10,17 @@ class Lists:
     Reads named value lists (e.g. NUTS0/NUTS2 region codes) so other parts of the
     code can look them up by name instead of hard-coding/duplicating the values.
 
-    Unlike Database, the two files this reads live in different directories and
-    play different roles:
-      - model_flow.lists.json, at the root of Code_directory -- the shared,
-        model-wide lists that ship with the model. Not discovered by scanning
-        (there's no script annotation for lists), so it's a plain hand-maintained
-        file, read as-is.
-      - model_flow.lists_user.json, in Database_directory -- each user's own
-        lists, defined without editing the shared source file.
+    Both files this reads live in Database_directory, mirroring Database's own
+    pipelines/pipelines_user split:
+      - model_flow.lists.json -- the shared, model-wide lists. A source
+        model_flow.lists.json can be placed in *any* folder of Code_directory
+        (there's no module scoping for lists); `model_flow build`
+        (Parser.parse_lists) collects every one of them, tags each list with the
+        folder it came from, and writes the aggregated result here -- mirroring
+        how model_flow.db.json/model_flow.pipelines.json are themselves built
+        artifacts, not hand-maintained in Database_directory directly.
+      - model_flow.lists_user.json -- each user's own lists, defined without
+        touching the build-generated source file.
 
     Both files are optional (mirrors Database's pipelines/pipelines_user
     optionality) so a config without any lists defined yet keeps working.
@@ -31,9 +34,9 @@ class Lists:
         Initialize the Lists object.
 
         Parameters:
-            config (Config): Config instance providing Code_directory/Database_directory.
+            config (Config): Config instance providing Database_directory.
         """
-        self.lists_path = Path(config.get("Code_directory"), self.lists_filename)
+        self.lists_path = Path(config.get("Database_directory"), self.lists_filename)
         self.user_lists_path = Path(config.get("Database_directory"), self.user_lists_filename)
 
         self.lists_data: Dict[str, Dict] = {}

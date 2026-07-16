@@ -23,21 +23,25 @@ def test_list_names_and_get_list_return_empty_when_no_files_exist(tmp_path):
     assert lists.get_elements("nuts0") is None
 
 
-def test_reads_shared_lists_file_from_code_directory(tmp_path):
+def test_reads_shared_lists_file_from_database_directory(tmp_path):
     code_dir = tmp_path / "code"
     db_dir = tmp_path / "db"
     code_dir.mkdir()
     db_dir.mkdir()
 
-    (code_dir / "model_flow.lists.json").write_text(
-        json.dumps({"lists": [{"name": "nuts0", "type": "string", "elements": ["AT", "BE"]}]}),
+    # model_flow.lists.json here is the *build-generated* aggregate (from
+    # Parser.parse_lists), so it's read from Database_directory, not Code_directory.
+    (db_dir / "model_flow.lists.json").write_text(
+        json.dumps({"lists": [{"name": "nuts0", "type": "string", "elements": ["AT", "BE"], "folder": "."}]}),
         encoding="utf-8",
     )
 
     lists = make_lists(tmp_path, code_dir=code_dir, db_dir=db_dir)
 
     assert lists.list_names() == ["nuts0"]
-    assert lists.get_list("nuts0") == {"name": "nuts0", "type": "string", "elements": ["AT", "BE"]}
+    assert lists.get_list("nuts0") == {
+        "name": "nuts0", "type": "string", "elements": ["AT", "BE"], "folder": "."
+    }
     assert lists.get_elements("nuts0") == ["AT", "BE"]
 
 
@@ -71,7 +75,7 @@ def test_add_list_user_true_persists_immediately_to_database_directory(tmp_path)
     assert user_lists_path.exists()
     on_disk = json.loads(user_lists_path.read_text(encoding="utf-8"))
     assert on_disk["lists"][0]["name"] == "my_list"
-    assert not (code_dir / "model_flow.lists.json").exists()
+    assert not (db_dir / "model_flow.lists.json").exists()  # shared file untouched
 
 
 def test_add_list_default_does_not_auto_persist(tmp_path):
