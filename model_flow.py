@@ -54,18 +54,25 @@ def build(config: Config) -> None:
         logger.info(f"Scanning code directory: {code_dir}")
         from classes.Parser import Parser  # Import the Parser class
         modules = Parser.parse_modules(str(code_dir))  # Use the Parser's parse_modules method
-        
+        pipelines = Parser.parse_pipelines(str(code_dir), modules)
+
         output_file = db_dir / "model_flow.db.json"
-        
+
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(modules, f, indent=4, ensure_ascii=False)
-            
+
+        pipelines_output_file = db_dir / "model_flow.pipelines.json"
+
+        with open(pipelines_output_file, 'w', encoding='utf-8') as f:
+            json.dump(pipelines, f, indent=4, ensure_ascii=False)
+
         # Detailed success message
         module_count = len(modules)
         task_count = sum(len(tasks) for tasks in modules.values())
+        pipeline_count = sum(len(p) for p in pipelines.values())
         logger.info(
             f"Build successful! Database saved to {output_file}\n"
-            f"Summary: {module_count} modules, {task_count} tasks"
+            f"Summary: {module_count} modules, {task_count} tasks, {pipeline_count} pipelines"
         )
         
     except Exception as e:
@@ -173,19 +180,60 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
         logger.error(f"Failed to execute task '{module}/{task_name}': {str(e)}")
         raise RuntimeError(f"Task execution failed: {str(e)}") from e
 
-def run_pipeline(config: str, module: str, pipeline: str) -> None:
+def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Optional[str] = None) -> int:
     """
-    Execute a pipeline of tasks
-    
+    Execute every task in a pipeline, sequentially, in declared order, via
+    ExecutionEngine.execute_task. Stops immediately at the first task that
+    returns a non-zero exit code; later tasks are not run.
+
     Args:
-        config: Path to config file
-        module: Module name containing pipeline
-        pipeline: Pipeline name to execute
-        
+        config: Config instance
+        module: Module name containing the pipeline
+        pipeline_name: Name of the pipeline to execute
+        output_dir: Optional directory for output files (defaults to Temporary_directory from config),
+            applied uniformly to every task in the pipeline
+
+    Returns:
+        0 if every task succeeded; otherwise the non-zero exit code of the first
+        task that failed (mirrors run_task's own int-return contract)
+
     Raises:
-        NotImplementedError: Currently not implemented
+        ValueError: If module/pipeline not found
+        RuntimeError: If a task's execution machinery raises
     """
-    raise NotImplementedError("Pipeline execution not yet implemented")
+    try:
+        engine = ExecutionEngine(config)
+        pipeline = engine.database.get_pipeline(module, pipeline_name)
+        if pipeline is None:
+            raise ValueError(
+                f"Pipeline '{pipeline_name}' not found in module '{module}'. "
+                f"Run 'build' first if this pipeline was just added."
+            )
+
+        task_names = pipeline.get("tasks", [])
+        final_output_dir = output_dir or config.get("Temporary_directory")
+        logger.info(f"Starting pipeline '{module}/{pipeline_name}' ({len(task_names)} tasks): {task_names}")
+
+        for index, task_name in enumerate(task_names, start=1):
+            logger.info(f"[{index}/{len(task_names)}] Running '{task_name}' (pipeline '{pipeline_name}')")
+            result = engine.execute_task(module, task_name, final_output_dir)
+
+            if result != 0:
+                logger.error(
+                    f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
+                    f"(step {index}/{len(task_names)}) exited {result}. "
+                    f"Remaining tasks not run: {task_names[index:]}"
+                )
+                return result
+
+        logger.info(f"Pipeline '{module}/{pipeline_name}' completed successfully ({len(task_names)} tasks).")
+        return 0
+
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to execute pipeline '{module}/{pipeline_name}': {str(e)}")
+        raise RuntimeError(f"Pipeline execution failed: {str(e)}") from e
 
 
 def show_task(config: Config, module: str, task_name: str) -> None:
@@ -366,7 +414,10 @@ def main():
 
     
     # Run pipeline command
-    run_pipeline_parser = subparsers.add_parser('run_pipeline', help='Execute a pipeline')
+    run_pipeline_parser = subparsers.add_parser(
+        'run_pipeline',
+        help='Execute a pipeline of tasks in declared order; per-task parameter overrides are not supported yet'
+    )
     run_pipeline_parser.add_argument(
         '--config',
         required=True,
@@ -381,6 +432,11 @@ def main():
         '--pipeline',
         required=True,
         help='Pipeline name to execute'
+    )
+    run_pipeline_parser.add_argument(
+        '--output_dir',
+        type=str,
+        help='Directory where log/output files will be saved (defaults to Temporary_directory from config)'
     )
     
     # Add show_task command parser
@@ -427,7 +483,7 @@ def main():
         print("   Usage: python model_flow.py run_task --config=<config_file> --module=<module> --task=<task> [--parallel]")
         
         print("\n5. run_pipeline - Execute a pipeline")
-        print("   Usage: python model_flow.py run_pipeline --config=<config_file> --module=<module> --pipeline=<pipeline>")
+        print("   Usage: python model_flow.py run_pipeline --config=<config_file> --module=<module> --pipeline=<pipeline> [--output_dir <dir>]")
         
         print("\n6. show_task - Display detailed task information")
         print("   Usage: python model_flow.py show_task --config=<config_file> --module=<module> --task=<task>")
@@ -471,7 +527,9 @@ def main():
                 parameters=params  # Pass the --set parameters here
             )
         elif args.command == 'run_pipeline':
-            run_pipeline(config, args.module, args.pipeline)
+            result = run_pipeline(config, args.module, args.pipeline, args.output_dir)
+            if result != 0:
+                sys.exit(result)
         elif args.command == 'list_tasks':
             list_tasks(config, args.module)
         elif args.command == 'show_task':  # New command

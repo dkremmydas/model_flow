@@ -16,6 +16,7 @@ class Parser:
     
     allowed_extensions = {".r", ".rmd", ".gms", ".bat"}
     ignore_dirs = {".git", ".vscode", ".svn", "__pycache__", "venv"}
+    pipelines_filename = "model_flow.pipelines.json"
 
     @staticmethod
     def parse_range_args(range_args: Optional[List[List[str]]]) -> Dict[str, List[float]]:
@@ -117,3 +118,84 @@ class Parser:
         except Exception as e:
             logger.error(f"Error during module parsing: {str(e)}")
             raise
+
+    @staticmethod
+    def parse_pipelines(directory: str, modules: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
+        """
+        Recursively scan `directory` for per-module model_flow.pipelines.json files,
+        validate each declared pipeline's task list against `modules` (the dict
+        already produced by parse_modules(directory)), and return the aggregated
+        pipelines dict.
+
+        Args:
+            directory: same root directory passed to parse_modules.
+            modules: output of parse_modules(directory) -- used to validate that
+                every task name referenced by a pipeline exists in that same module.
+
+        Returns:
+            Dict[str, List[Dict]]: {module_name: [{"name", "description", "tasks"}, ...]}
+
+        Raises:
+            FileNotFoundError: If the directory doesn't exist.
+        """
+        ignore_dirs = Parser.ignore_dirs
+        pipelines: Dict[str, List[Dict]] = {}
+        existing_names: Dict[str, set] = {}
+
+        root_path = Path(directory).resolve()
+        if not root_path.is_dir():
+            raise FileNotFoundError(f"Directory not found: {directory}")
+
+        for root, dirs, files in os.walk(root_path):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+
+            if Parser.pipelines_filename not in files:
+                continue
+
+            file_path = Path(root) / Parser.pipelines_filename
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Skipping malformed pipelines file {file_path}: {e}")
+                continue
+
+            module_name = raw.get("module")
+            if not module_name:
+                logger.warning(f"Skipping {file_path}: missing required 'module' field")
+                continue
+
+            known_tasks = {t["name"] for t in modules.get(module_name, [])}
+            if not known_tasks:
+                logger.warning(f"{file_path} declares module '{module_name}' with no known tasks")
+
+            module_names = existing_names.setdefault(module_name, set())
+
+            for entry in raw.get("pipelines", []):
+                name = entry.get("name")
+                tasks = entry.get("tasks")
+
+                if not name:
+                    logger.warning(f"Skipping unnamed pipeline in {file_path}")
+                    continue
+                if name in module_names:
+                    logger.warning(f"Skipping duplicate pipeline '{name}' for module '{module_name}' in {file_path}")
+                    continue
+                if not tasks or not isinstance(tasks, list) or not all(isinstance(t, str) for t in tasks):
+                    logger.warning(f"Skipping pipeline '{name}' in {file_path}: 'tasks' missing/empty/malformed")
+                    continue
+                missing = [t for t in tasks if t not in known_tasks]
+                if missing:
+                    logger.warning(f"Skipping pipeline '{name}' in {file_path}: unknown task(s) {missing}")
+                    continue
+
+                pipelines.setdefault(module_name, []).append({
+                    "name": name,
+                    "description": (entry.get("description") or "").strip(),
+                    "tasks": tasks,
+                })
+                module_names.add(name)
+
+        logger.info(f"Found {sum(len(v) for v in pipelines.values())} pipelines across {len(pipelines)} modules")
+        return pipelines

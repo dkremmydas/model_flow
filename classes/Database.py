@@ -17,9 +17,13 @@ class Database:
         """
         self.db_path = Path(config.get("Database_directory"), "model_flow.db.json")
         self.user_db_path = Path(config.get("Database_directory"), "model_flow.db_user.json")
+        self.pipelines_path = Path(config.get("Database_directory"), "model_flow.pipelines.json")
+        self.user_pipelines_path = Path(config.get("Database_directory"), "model_flow.pipelines_user.json")
 
         self.data = {}
         self.user_data = {}
+        self.pipelines_data = {}
+        self.user_pipelines_data = {}
 
         # Load the database if it exists
         if self.db_path.exists():
@@ -30,6 +34,15 @@ class Database:
         # The user-override database is optional; it is created lazily on first save.
         if self.user_db_path.exists():
             self._load_user_data()
+
+        # The pipelines database (and its user-override sibling) are both optional --
+        # a config still built before pipelines support existed must keep working for
+        # task-only workflows (run_task, run_gui) without a forced rebuild.
+        if self.pipelines_path.exists():
+            self.load_pipelines()
+
+        if self.user_pipelines_path.exists():
+            self._load_user_pipelines()
 
     def load(self):
         """
@@ -55,6 +68,135 @@ class Database:
             print(f"Database saved to {self.db_path}")
         except Exception as e:
             raise RuntimeError(f"Failed to save database: {str(e)}") from e
+
+    def load_pipelines(self):
+        """
+        Load the pipelines database (model_flow.pipelines.json) from disk.
+        """
+        try:
+            with open(self.pipelines_path, "r", encoding="utf-8") as pipelines_file:
+                self.pipelines_data = json.load(pipelines_file)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in pipelines file: {self.pipelines_path}") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to load pipelines database: {str(e)}") from e
+
+    def save_pipelines(self):
+        """
+        Save the current pipelines database to the JSON file.
+        """
+        try:
+            self.pipelines_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.pipelines_path, "w", encoding="utf-8") as pipelines_file:
+                json.dump(self.pipelines_data, pipelines_file, indent=4)
+        except Exception as e:
+            raise RuntimeError(f"Failed to save pipelines database: {str(e)}") from e
+
+    def _load_user_pipelines(self):
+        """
+        Load the user-authored pipelines database (model_flow.pipelines_user.json) from disk.
+        """
+        try:
+            with open(self.user_pipelines_path, "r", encoding="utf-8") as user_pipelines_file:
+                self.user_pipelines_data = json.load(user_pipelines_file)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in user pipelines file: {self.user_pipelines_path}") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to load user pipelines database: {str(e)}") from e
+
+    def _save_user_pipelines(self):
+        """
+        Save the user-authored pipelines database (model_flow.pipelines_user.json) to disk.
+        """
+        try:
+            self.user_pipelines_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.user_pipelines_path, "w", encoding="utf-8") as user_pipelines_file:
+                json.dump(self.user_pipelines_data, user_pipelines_file, indent=4)
+        except Exception as e:
+            raise RuntimeError(f"Failed to save user pipelines database: {str(e)}") from e
+
+    def list_pipelines(self, module_name: str) -> List[str]:
+        """
+        Return the names of all pipelines for a module, merging source-declared
+        (model_flow.pipelines.json) and user-authored (model_flow.pipelines_user.json)
+        pipelines. On a name collision, the source-declared pipeline wins.
+
+        Parameters:
+            module_name (str): The name of the module.
+
+        Returns:
+            List[str]: Pipeline names for the module.
+        """
+        source_names = [p["name"] for p in self.pipelines_data.get(module_name, [])]
+        user_names = [
+            p["name"] for p in self.user_pipelines_data.get(module_name, [])
+            if p["name"] not in source_names
+        ]
+        return source_names + user_names
+
+    def get_pipeline(self, module_name: str, pipeline_name: str) -> Optional[Dict]:
+        """
+        Get a specific pipeline by module and pipeline name. Source-declared
+        pipelines (model_flow.pipelines.json) take precedence over user-authored
+        ones (model_flow.pipelines_user.json) on a name collision.
+
+        Parameters:
+            module_name (str): The name of the module.
+            pipeline_name (str): The name of the pipeline.
+
+        Returns:
+            Dict: The pipeline metadata, or None if the pipeline doesn't exist.
+        """
+        for pipeline in self.pipelines_data.get(module_name, []):
+            if pipeline.get("name") == pipeline_name:
+                return pipeline
+        for pipeline in self.user_pipelines_data.get(module_name, []):
+            if pipeline.get("name") == pipeline_name:
+                return pipeline
+        return None
+
+    def add_pipeline(self, module_name: str, pipeline: Dict, user: bool = False):
+        """
+        Add a new pipeline to a module.
+
+        Parameters:
+            module_name (str): The name of the module.
+            pipeline (Dict): The pipeline metadata to add (e.g. {"name", "tasks", "description"}).
+            user (bool): If True, adds to the user-authored pipelines database and
+                persists immediately. If False (default), adds to the source-declared
+                pipelines database in-memory only -- caller must call save_pipelines()
+                (mirrors add_task's contract, since source data is build-regenerated anyway).
+        """
+        if user:
+            self.user_pipelines_data.setdefault(module_name, []).append(pipeline)
+            self._save_user_pipelines()
+        else:
+            self.pipelines_data.setdefault(module_name, []).append(pipeline)
+
+    def delete_pipeline(self, module_name: str, pipeline_name: str, user: bool = False):
+        """
+        Delete a specific pipeline from a module.
+
+        Parameters:
+            module_name (str): The name of the module.
+            pipeline_name (str): The name of the pipeline to delete.
+            user (bool): If True, deletes from the user-authored pipelines database
+                and persists immediately. If False (default), deletes from the
+                source-declared pipelines database in-memory only.
+        """
+        if user:
+            module_pipelines = self.user_pipelines_data.get(module_name)
+            if module_pipelines:
+                self.user_pipelines_data[module_name] = [
+                    p for p in module_pipelines if p.get("name") != pipeline_name
+                ]
+                self._save_user_pipelines()
+        else:
+            module_pipelines = self.pipelines_data.get(module_name)
+            if module_pipelines:
+                self.pipelines_data[module_name] = [
+                    p for p in module_pipelines if p.get("name") != pipeline_name
+                ]
 
     def _load_user_data(self):
         """
