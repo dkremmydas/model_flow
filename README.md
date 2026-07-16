@@ -119,6 +119,40 @@ Pipelines are declared, per module, in a `model_flow.pipelines.json` file placed
 
 `model_flow build` discovers every module's `model_flow.pipelines.json`, validates each pipeline's task list, and aggregates the result into `model_flow.pipelines.json` in `Database_directory` — mirroring how `model_flow.db.json` aggregates task annotations. Invalid entries (an unknown task, a missing `module`, a duplicate pipeline name) are dropped with a warning rather than failing the whole build, same as task-parsing warnings elsewhere.
 
+## Lists
+
+A List is a named, ordered collection of values — e.g. the set of NUTS0 country codes or NUTS2 region codes used across a CAP model — kept in one place so scripts/parameters can reference it by name instead of every task repeating (and risking drifting copies of) the same values.
+
+Unlike tasks and pipelines, lists aren't discovered by scanning `Code_directory` — there's no script annotation for them. Instead, there is a single `model_flow.lists.json` at the root of `Code_directory`, holding the default/mainstream lists that ship with the model:
+
+```json
+{
+  "lists": [
+    {
+      "name": "nuts0",
+      "type": "string",
+      "description": "EU27 member state codes (NUTS level 0).",
+      "elements": ["AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "EL", "ES", "..."]
+    },
+    {
+      "name": "nuts2",
+      "type": "string",
+      "description": "NUTS level 2 region codes.",
+      "elements": ["AT11", "AT12", "AT13", "AT21", "AT22", "..."]
+    }
+  ]
+}
+```
+
+- `name` — the list's identifier.
+- `type` — `string` or `number`; the type of every entry in `elements`.
+- `elements` — the ordered list of values.
+- `description` — optional free text.
+
+`model_flow.lists_user.json`, in `Database_directory` (not `Code_directory`), is where each user defines their own lists, without editing the shared, model-wide source file. It's optional and only needs to exist once something has actually been added to it.
+
+(Lists are a reference/lookup mechanism, not yet read by any `model_flow` command — this is groundwork for future features that consume named value sets, e.g. driving a task or pipeline once per element.)
+
 ## Command line
 
 The main executable is the model_flow script. We call it like
