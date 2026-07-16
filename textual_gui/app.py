@@ -50,7 +50,8 @@ class SelectTask(Widget):
         self.database = modelflowapp.database
         self.modules = self.database.list_modules() or ["No modules available"]  # Load the list of modules or provide a fallback
         self.module_tasks = {module: self.database.list_module_tasks(module) for module in self.modules}
-        self.tree = Tree("Modules and Tasks", id="tree-view")
+        self.module_pipelines = {module: self.database.list_pipelines(module) for module in self.modules}
+        self.tree = Tree("Modules", id="tree-view")
 
 
     def compose(self) -> ComposeResult:
@@ -72,6 +73,7 @@ class SelectTask(Widget):
         """Reload modules/tasks from the database (e.g. after a rebuild) and re-render the tree."""
         self.modules = self.database.list_modules() or ["No modules available"]
         self.module_tasks = {module: self.database.list_module_tasks(module) for module in self.modules}
+        self.module_pipelines = {module: self.database.list_pipelines(module) for module in self.modules}
         search_input = self.query_one("#module-search", Input)
         self.filter_tree(search_input.value)
 
@@ -88,12 +90,18 @@ class SelectTask(Widget):
         root = self.tree.root
 
         for module, tasks in self.module_tasks.items():
+            pipelines = self.module_pipelines.get(module, [])
             module_matches = query in module.lower()
             matching_tasks = tasks if module_matches else [t for t in tasks if query in t.lower()]
-            if module_matches or matching_tasks:
+            matching_pipelines = pipelines if module_matches else [p for p in pipelines if query in p.lower()]
+            if module_matches or matching_tasks or matching_pipelines:
                 module_node = root.add(module)
+                tasks_node = module_node.add("Tasks")
                 for task in matching_tasks:
-                    module_node.add(task)
+                    tasks_node.add(task)
+                pipelines_node = module_node.add("Pipelines")
+                for pipeline in matching_pipelines:
+                    pipelines_node.add(pipeline)
         root.expand()
 
     async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
@@ -461,11 +469,16 @@ class ModelFlowApp(App):
 
     async def select_task(self, node) -> None:
         """Update the task in the ShowTask widget."""
-        task_name = str(node.label)
-        module_name = None if str(node.parent.label) == 'Modules and Tasks' else str(node.parent.label)
-
-        if not module_name:
+        # Tree shape is root("Modules") -> module -> "Tasks"/"Pipelines" -> leaf.
+        # Only a leaf under a "Tasks" group is an actual, runnable task; selecting
+        # a module node, a "Tasks"/"Pipelines" group node, or a pipeline leaf
+        # (pipeline execution/editing isn't wired into the GUI yet) is a no-op.
+        parent = node.parent
+        if parent is None or parent.parent is None or str(parent.label) != "Tasks":
             return
+
+        task_name = str(node.label)
+        module_name = str(parent.parent.label)
 
         task = self.database.get_task(module_name, task_name)
         if not task:

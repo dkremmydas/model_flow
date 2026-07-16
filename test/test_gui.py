@@ -96,7 +96,7 @@ async def test_selecting_task_populates_editable_config_with_default_value(tmp_p
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
-        task_node = select_task.tree.root.children[0].children[0]
+        task_node = select_task.tree.root.children[0].children[0].children[0]
         await select_task_node(pilot, select_task, task_node)
 
         show_task = app.query_one(ShowTask)
@@ -117,7 +117,7 @@ async def test_execute_task_calls_engine_with_overrides_and_persists_history(tmp
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
-        task_node = select_task.tree.root.children[0].children[0]
+        task_node = select_task.tree.root.children[0].children[0].children[0]
         await select_task_node(pilot, select_task, task_node)
 
         input_widget = app.query_one("#input-ext_par")
@@ -161,7 +161,7 @@ async def test_execute_task_streams_output_live_via_call_from_thread(tmp_path):
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
-        task_node = select_task.tree.root.children[0].children[0]
+        task_node = select_task.tree.root.children[0].children[0].children[0]
         await select_task_node(pilot, select_task, task_node)
 
         def fake_execute_task(module, task_name, output_dir, overrides, capture_output, on_output, on_process_start):
@@ -209,7 +209,7 @@ async def test_kill_task_terminates_running_process_and_shows_aborted(tmp_path):
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
-        task_node = select_task.tree.root.children[0].children[0]
+        task_node = select_task.tree.root.children[0].children[0].children[0]
         await select_task_node(pilot, select_task, task_node)
 
         with patch.object(app.engine, "execute_task", side_effect=fake_execute_task):
@@ -254,7 +254,7 @@ async def test_execute_task_ignores_second_press_while_already_running(tmp_path)
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
-        task_node = select_task.tree.root.children[0].children[0]
+        task_node = select_task.tree.root.children[0].children[0].children[0]
         await select_task_node(pilot, select_task, task_node)
 
         app.current_process = FakeProcess()  # simulate a run already in progress
@@ -336,7 +336,7 @@ async def test_execute_task_reveals_hidden_output_panel_fullscreen(tmp_path):
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
-        task_node = select_task.tree.root.children[0].children[0]
+        task_node = select_task.tree.root.children[0].children[0].children[0]
         await select_task_node(pilot, select_task, task_node)
 
         execute_panel = app.query_one(ExecuteTask)
@@ -394,7 +394,7 @@ async def test_execute_task_shows_error_status_on_engine_failure(tmp_path):
 
     async with app.run_test() as pilot:
         select_task = app.query_one(SelectTask)
-        task_node = select_task.tree.root.children[0].children[0]
+        task_node = select_task.tree.root.children[0].children[0].children[0]
         await select_task_node(pilot, select_task, task_node)
 
         with patch.object(app.engine, "execute_task", side_effect=RuntimeError("boom")):
