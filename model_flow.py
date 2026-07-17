@@ -54,8 +54,8 @@ def build(config: Config) -> None:
         logger.info(f"Scanning code directory: {code_dir}")
         from classes.Parser import Parser  # Import the Parser class
         modules = Parser.parse_modules(str(code_dir))  # Use the Parser's parse_modules method
-        pipelines = Parser.parse_pipelines(str(code_dir), modules)
         lists = Parser.parse_lists(str(code_dir))
+        pipelines = Parser.parse_pipelines(str(code_dir), modules, lists)
 
         output_file = db_dir / "model_flow.db.json"
 
@@ -190,9 +190,12 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
 
 def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Optional[str] = None) -> int:
     """
-    Execute every task in a pipeline, sequentially, in declared order, via
-    ExecutionEngine.execute_task. Stops immediately at the first task that
-    returns a non-zero exit code; later tasks are not run.
+    Execute every task in a pipeline, in declared order, via
+    ExecutionEngine.execute_pipeline. Stops immediately at the first task (or,
+    for a looped task, the first iteration/step) that fails; later tasks are not
+    run. A task may declare static parameter overrides and/or a loop over one or
+    more parameters driven by named Lists, run sequentially or in parallel --
+    see ExecutionEngine.execute_pipeline for the full semantics.
 
     Args:
         config: Config instance
@@ -211,31 +214,14 @@ def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Op
     """
     try:
         engine = ExecutionEngine(config)
-        pipeline = engine.database.get_pipeline(module, pipeline_name)
-        if pipeline is None:
-            raise ValueError(
-                f"Pipeline '{pipeline_name}' not found in module '{module}'. "
-                f"Run 'build' first if this pipeline was just added."
-            )
+        result = engine.execute_pipeline(module, pipeline_name, output_dir)
 
-        task_names = pipeline.get("tasks", [])
-        final_output_dir = output_dir or config.get("Temporary_directory")
-        logger.info(f"Starting pipeline '{module}/{pipeline_name}' ({len(task_names)} tasks): {task_names}")
+        if result == 0:
+            logger.info(f"Pipeline '{module}/{pipeline_name}' completed successfully.")
+        else:
+            logger.error(f"Pipeline '{module}/{pipeline_name}' stopped with exit code {result}.")
 
-        for index, task_name in enumerate(task_names, start=1):
-            logger.info(f"[{index}/{len(task_names)}] Running '{task_name}' (pipeline '{pipeline_name}')")
-            result = engine.execute_task(module, task_name, final_output_dir)
-
-            if result != 0:
-                logger.error(
-                    f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
-                    f"(step {index}/{len(task_names)}) exited {result}. "
-                    f"Remaining tasks not run: {task_names[index:]}"
-                )
-                return result
-
-        logger.info(f"Pipeline '{module}/{pipeline_name}' completed successfully ({len(task_names)} tasks).")
-        return 0
+        return result
 
     except ValueError:
         raise
@@ -424,7 +410,8 @@ def main():
     # Run pipeline command
     run_pipeline_parser = subparsers.add_parser(
         'run_pipeline',
-        help='Execute a pipeline of tasks in declared order; per-task parameter overrides are not supported yet'
+        help='Execute a pipeline of tasks in declared order; per-task overrides and List-driven '
+             'sequential/parallel loops are declared in model_flow.pipelines.json'
     )
     run_pipeline_parser.add_argument(
         '--config',

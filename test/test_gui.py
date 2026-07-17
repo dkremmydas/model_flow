@@ -265,7 +265,7 @@ async def test_execute_pipeline_runs_tasks_in_order_with_overrides_and_persists_
 
         assert calls == [
             ("test_module", "task_a", {"ext_par": "99"}),
-            ("test_module", "task_b", {}),
+            ("test_module", "task_b", None),
         ]
         assert mock_execute.call_count == 2
 
@@ -341,7 +341,7 @@ async def test_execute_pipeline_can_be_aborted_via_ctrl_k(tmp_path):
 
         # Aborted mid-first-task -- task_b must never have been reached.
         assert mock_execute.call_count == 1
-        assert app.current_process is None
+        assert app.current_processes == []
 
         execute_panel = app.query_one(ExecuteTask)
         assert "aborted" in str(execute_panel.status.content)
@@ -452,7 +452,7 @@ async def test_kill_task_terminates_running_process_and_shows_aborted(tmp_path):
             run_task = asyncio.ensure_future(app.action_execute_task())
             await asyncio.sleep(0.2)  # let the worker thread reach on_process_start and block
 
-            assert app.current_process is fake_process
+            assert app.current_processes == [fake_process]
             app.action_kill_task()
             assert app.execution_cancelled is True
 
@@ -460,7 +460,7 @@ async def test_kill_task_terminates_running_process_and_shows_aborted(tmp_path):
             await pilot.pause()
 
         assert fake_process.terminated.is_set()
-        assert app.current_process is None
+        assert app.current_processes == []
 
         execute_panel = app.query_one(ExecuteTask)
         assert "aborted" in str(execute_panel.status.content)

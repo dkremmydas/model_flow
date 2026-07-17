@@ -1,8 +1,9 @@
 import os
 import json
+import itertools
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from classes.Task import Task
 import logging
 
@@ -128,7 +129,8 @@ class Parser:
             raise
 
     @staticmethod
-    def parse_pipelines(directory: str, modules: Dict[str, List[Dict]], on_file=None) -> Dict[str, List[Dict]]:
+    def parse_pipelines(directory: str, modules: Dict[str, List[Dict]],
+                         lists: Optional[Dict[str, Dict]] = None, on_file=None) -> Dict[str, List[Dict]]:
         """
         Recursively scan `directory` for per-module model_flow.pipelines.json files,
         validate each declared pipeline's task list against `modules` (the dict
@@ -138,17 +140,30 @@ class Parser:
         Args:
             directory: same root directory passed to parse_modules.
             modules: output of parse_modules(directory) -- used to validate that
-                every task name referenced by a pipeline exists in that same module.
+                every task name referenced by a pipeline exists in that same module,
+                and to look up each task's config script-names for validating
+                per-task overrides/loop parameters (see _normalize_pipeline_tasks).
+            lists: output of parse_lists(directory), used to validate that a task's
+                loop.parameters list-name references actually exist, and that a
+                "zip" loop's referenced lists have equal length. Defaults to {} (no
+                known lists) if omitted -- callers with no pipelines using loops
+                don't need to supply it.
             on_file: Optional callback invoked with the path of each
                 model_flow.pipelines.json file found, as it's scanned.
 
         Returns:
             Dict[str, List[Dict]]: {module_name: [{"name", "description", "tasks"}, ...]}
+                where each "tasks" entry is normalized to
+                {"task": name, "overrides": {script_name: value}, "loop": {...} | None}
+                regardless of whether it was authored as a plain task-name string or
+                an object -- so downstream consumers (Database/ExecutionEngine/GUI)
+                never need to branch on the authored shape.
 
         Raises:
             FileNotFoundError: If the directory doesn't exist.
         """
         ignore_dirs = Parser.ignore_dirs
+        lists = lists or {}
         pipelines: Dict[str, List[Dict]] = {}
         existing_names: Dict[str, set] = {}
 
@@ -178,7 +193,7 @@ class Parser:
                 logger.warning(f"Skipping {file_path}: missing required 'module' field")
                 continue
 
-            known_tasks = {t["name"] for t in modules.get(module_name, [])}
+            known_tasks = {t["name"]: t for t in modules.get(module_name, [])}
             if not known_tasks:
                 logger.warning(f"{file_path} declares module '{module_name}' with no known tasks")
 
@@ -194,23 +209,150 @@ class Parser:
                 if name in module_names:
                     logger.warning(f"Skipping duplicate pipeline '{name}' for module '{module_name}' in {file_path}")
                     continue
-                if not tasks or not isinstance(tasks, list) or not all(isinstance(t, str) for t in tasks):
+                if not tasks or not isinstance(tasks, list):
                     logger.warning(f"Skipping pipeline '{name}' in {file_path}: 'tasks' missing/empty/malformed")
                     continue
-                missing = [t for t in tasks if t not in known_tasks]
-                if missing:
-                    logger.warning(f"Skipping pipeline '{name}' in {file_path}: unknown task(s) {missing}")
+
+                normalized_tasks, error = Parser._normalize_pipeline_tasks(tasks, known_tasks, lists)
+                if error:
+                    logger.warning(f"Skipping pipeline '{name}' in {file_path}: {error}")
                     continue
 
                 pipelines.setdefault(module_name, []).append({
                     "name": name,
                     "description": (entry.get("description") or "").strip(),
-                    "tasks": tasks,
+                    "tasks": normalized_tasks,
                 })
                 module_names.add(name)
 
         logger.info(f"Found {sum(len(v) for v in pipelines.values())} pipelines across {len(pipelines)} modules")
         return pipelines
+
+    @staticmethod
+    def _normalize_pipeline_tasks(tasks: List, known_tasks: Dict[str, Dict],
+                                   lists: Dict[str, Dict]) -> Tuple[Optional[List[Dict]], Optional[str]]:
+        """
+        Validate and normalize one pipeline's "tasks" list. Every entry -- whether
+        authored as a plain task-name string or an object with "task"/"overrides"/
+        "loop" -- becomes {"task", "overrides", "loop"}. Returns (normalized, None)
+        on success, or (None, error_message) on the first problem found -- the
+        caller skips the *whole* pipeline on any error, matching the existing rule
+        that a single unknown task name already invalidates the entire pipeline
+        rather than silently dropping just that one step.
+        """
+        normalized = []
+
+        for item in tasks:
+            if isinstance(item, str):
+                task_name, overrides, loop = item, {}, None
+            elif isinstance(item, dict):
+                task_name = item.get("task")
+                overrides = item.get("overrides") or {}
+                loop = item.get("loop")
+                if not task_name or not isinstance(task_name, str):
+                    return None, f"task entry missing required 'task' name: {item!r}"
+                if not isinstance(overrides, dict):
+                    return None, f"'overrides' must be an object for task '{task_name}'"
+            else:
+                return None, f"invalid task entry (must be a string or object): {item!r}"
+
+            if task_name not in known_tasks:
+                return None, f"unknown task '{task_name}'"
+
+            config_names = {
+                c["script_name"] for c in known_tasks[task_name].get("config", []) if "script_name" in c
+            }
+
+            unknown_overrides = sorted(set(overrides) - config_names)
+            if unknown_overrides:
+                return None, f"unknown override parameter(s) {unknown_overrides} for task '{task_name}'"
+
+            if loop is not None:
+                if not isinstance(loop, dict):
+                    return None, f"'loop' must be an object for task '{task_name}'"
+
+                parameters = loop.get("parameters")
+                if not parameters or not isinstance(parameters, dict):
+                    return None, f"'loop.parameters' missing/empty/malformed for task '{task_name}'"
+
+                unknown_params = sorted(set(parameters) - config_names)
+                if unknown_params:
+                    return None, f"unknown loop parameter(s) {unknown_params} for task '{task_name}'"
+
+                overlap = sorted(set(parameters) & set(overrides))
+                if overlap:
+                    return None, (
+                        f"loop parameter(s) {overlap} also present in 'overrides' for task '{task_name}'"
+                    )
+
+                unknown_lists = sorted(ln for ln in parameters.values() if ln not in lists)
+                if unknown_lists:
+                    return None, f"unknown list(s) {unknown_lists} referenced by task '{task_name}'"
+
+                mode = loop.get("mode", "sequential")
+                if mode not in ("sequential", "parallel"):
+                    return None, f"invalid loop 'mode' {mode!r} for task '{task_name}'"
+
+                combine = loop.get("combine")
+                if combine is not None and combine not in ("zip", "product"):
+                    return None, f"invalid loop 'combine' {combine!r} for task '{task_name}'"
+                if len(parameters) > 1:
+                    if combine is None:
+                        return None, (
+                            f"loop 'combine' ('zip' or 'product') is required when looping over "
+                            f"multiple parameters, for task '{task_name}'"
+                        )
+                    if combine == "zip":
+                        # Only the lengths are needed to validate a "zip" loop at
+                        # build time -- not the full expand_loop() expansion, which
+                        # would needlessly materialize a "product" loop's full
+                        # (potentially huge) cartesian combination just to check this.
+                        lengths = {len(lists[ln]["elements"]) for ln in parameters.values()}
+                        if len(lengths) > 1:
+                            return None, f"'zip' loop lists have mismatched lengths for task '{task_name}'"
+
+                max_workers = loop.get("max_workers")
+                if max_workers is not None and (
+                    not isinstance(max_workers, int) or isinstance(max_workers, bool) or max_workers < 1
+                ):
+                    return None, f"loop 'max_workers' must be a positive integer for task '{task_name}'"
+
+                loop = {
+                    "parameters": parameters,
+                    "combine": combine,
+                    "mode": mode,
+                    "max_workers": max_workers,
+                }
+
+            normalized.append({"task": task_name, "overrides": overrides, "loop": loop})
+
+        return normalized, None
+
+    @staticmethod
+    def expand_loop(loop: Dict, resolve) -> List[Dict[str, str]]:
+        """
+        Expand a validated pipeline-task "loop" declaration into an ordered list of
+        per-iteration {script_name: value} override dicts.
+
+        `resolve(list_name)` must return that list's elements -- a plain dict
+        lookup (`lambda name: lists[name]["elements"]`) at build/validation time,
+        or Lists.get_elements at run time. Run time re-resolves current list
+        contents rather than trusting a build-time snapshot, since a list's
+        elements can change independently of when the pipeline itself was built.
+        """
+        param_lists = {param: resolve(list_name) for param, list_name in loop["parameters"].items()}
+
+        if len(param_lists) == 1:
+            (param, elements), = param_lists.items()
+            return [{param: value} for value in elements]
+
+        names = list(param_lists.keys())
+        values_per_name = [param_lists[name] for name in names]
+
+        if loop.get("combine") == "zip":
+            return [dict(zip(names, combo)) for combo in zip(*values_per_name)]
+
+        return [dict(zip(names, combo)) for combo in itertools.product(*values_per_name)]
 
     @staticmethod
     def parse_lists(directory: str, on_file=None) -> Dict[str, Dict]:

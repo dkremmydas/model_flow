@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -344,3 +345,142 @@ def test_capture_output_without_on_output_still_uses_blocking_subprocess_run(eng
 
     assert result.stdout == "hello output"
     assert fake_popen == []  # Popen (streaming) was never invoked
+
+
+@pytest.fixture
+def fake_execute_task(monkeypatch):
+    """Replace ExecutionEngine.execute_task with a fake that just records calls,
+    for exercising execute_pipeline's own looping/parallel/failure logic without
+    touching real subprocesses."""
+    calls = []
+    results = {"queue": None}
+
+    def _fake_execute_task(self, module, task_name, output_dir=None, overrides=None, **kwargs):
+        calls.append((module, task_name, output_dir, overrides))
+        if results["queue"] is not None:
+            return results["queue"].pop(0)
+        return 0
+
+    monkeypatch.setattr(ExecutionEngine, "execute_task", _fake_execute_task)
+    return calls, results
+
+
+def set_pipeline(engine, module, name, tasks):
+    engine.database.pipelines_data = {module: [{"name": name, "description": "", "tasks": tasks}]}
+
+
+def test_execute_pipeline_runs_non_looped_tasks_in_order(engine, fake_execute_task):
+    calls, _ = fake_execute_task
+    set_pipeline(engine, "test_module", "run_all", [
+        {"task": "1_task", "overrides": {"a": "1"}, "loop": None},
+        {"task": "2_task", "overrides": {}, "loop": None},
+    ])
+
+    result = engine.execute_pipeline("test_module", "run_all")
+
+    assert result == 0
+    assert [(c[1], c[3]) for c in calls] == [("1_task", {"a": "1"}), ("2_task", None)]
+
+
+def test_execute_pipeline_stops_at_first_failing_task(engine, fake_execute_task):
+    calls, results = fake_execute_task
+    results["queue"] = [0, 1]
+    set_pipeline(engine, "test_module", "run_all", [
+        {"task": "1_task", "overrides": {}, "loop": None},
+        {"task": "2_task", "overrides": {}, "loop": None},
+        {"task": "3_task", "overrides": {}, "loop": None},
+    ])
+
+    result = engine.execute_pipeline("test_module", "run_all")
+
+    assert result == 1
+    assert [c[1] for c in calls] == ["1_task", "2_task"]  # 3_task never called
+
+
+def test_execute_pipeline_raises_value_error_for_unknown_pipeline(engine):
+    with pytest.raises(ValueError, match="not found"):
+        engine.execute_pipeline("test_module", "does_not_exist")
+
+
+def test_execute_pipeline_expands_sequential_loop_over_list_elements(engine, fake_execute_task):
+    calls, _ = fake_execute_task
+    engine.lists.lists_data = {"nuts2": {"name": "nuts2", "elements": ["AT11", "AT12"]}}
+    set_pipeline(engine, "test_module", "run_all", [
+        {"task": "1_task", "overrides": {"scenario": "baseline"},
+         "loop": {"parameters": {"nuts_code": "nuts2"}, "combine": None, "mode": "sequential", "max_workers": None}},
+    ])
+
+    result = engine.execute_pipeline("test_module", "run_all", output_dir=str(engine.config.get("Temporary_directory")))
+
+    assert result == 0
+    assert [c[3] for c in calls] == [
+        {"scenario": "baseline", "nuts_code": "AT11"},
+        {"scenario": "baseline", "nuts_code": "AT12"},
+    ]
+    # each iteration gets its own output subdirectory so repeated runs of the
+    # same task don't collide on output filenames
+    output_dirs = [c[2] for c in calls]
+    assert len(set(output_dirs)) == 2
+    for output_dir in output_dirs:
+        assert Path(output_dir).is_dir()
+
+
+def test_execute_pipeline_sequential_loop_stops_at_first_failing_iteration(engine, fake_execute_task):
+    calls, results = fake_execute_task
+    results["queue"] = [0, 1, 0]
+    engine.lists.lists_data = {"nuts2": {"name": "nuts2", "elements": ["AT11", "AT12", "AT13"]}}
+    set_pipeline(engine, "test_module", "run_all", [
+        {"task": "1_task", "overrides": {},
+         "loop": {"parameters": {"nuts_code": "nuts2"}, "combine": None, "mode": "sequential", "max_workers": None}},
+    ])
+
+    result = engine.execute_pipeline("test_module", "run_all")
+
+    assert result == 1
+    assert len(calls) == 2  # stopped after the second (failing) iteration
+
+
+def test_execute_pipeline_parallel_loop_runs_all_iterations_and_reports_first_failure(engine, fake_execute_task):
+    calls, results = fake_execute_task
+    results["queue"] = [0, 1, 0]
+    engine.lists.lists_data = {"nuts2": {"name": "nuts2", "elements": ["AT11", "AT12", "AT13"]}}
+    set_pipeline(engine, "test_module", "run_all", [
+        {"task": "1_task", "overrides": {},
+         "loop": {"parameters": {"nuts_code": "nuts2"}, "combine": None, "mode": "parallel", "max_workers": None}},
+    ])
+
+    result = engine.execute_pipeline("test_module", "run_all")
+
+    assert result == 1
+    assert len(calls) == 3  # all iterations still ran despite the middle one failing
+
+
+def test_execute_pipeline_parallel_loop_respects_max_workers(engine, monkeypatch):
+    """Bound concurrency to max_workers -- never more than that many execute_task
+    calls should be in flight at once."""
+    import threading
+    import time
+
+    current = {"n": 0, "max_seen": 0}
+    lock = threading.Lock()
+
+    def _fake_execute_task(self, module, task_name, output_dir=None, overrides=None, **kwargs):
+        with lock:
+            current["n"] += 1
+            current["max_seen"] = max(current["max_seen"], current["n"])
+        time.sleep(0.05)
+        with lock:
+            current["n"] -= 1
+        return 0
+
+    monkeypatch.setattr(ExecutionEngine, "execute_task", _fake_execute_task)
+    engine.lists.lists_data = {"nuts2": {"name": "nuts2", "elements": ["A", "B", "C", "D", "E", "F"]}}
+    set_pipeline(engine, "test_module", "run_all", [
+        {"task": "1_task", "overrides": {},
+         "loop": {"parameters": {"nuts_code": "nuts2"}, "combine": None, "mode": "parallel", "max_workers": 2}},
+    ])
+
+    result = engine.execute_pipeline("test_module", "run_all")
+
+    assert result == 0
+    assert current["max_seen"] <= 2

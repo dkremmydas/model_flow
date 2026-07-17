@@ -194,6 +194,16 @@ class ShowTask(Widget):
         show_task's own bare `_param_widget_id(script_name)` isn't unique enough here."""
         return "pipeline-" + cls._param_widget_id(f"{task_name}_{script_name}")
 
+    @staticmethod
+    def _describe_loop(loop: dict) -> str:
+        """One-line, read-only summary of a pipeline task's loop declaration, e.g.
+        "Looped over nuts_code=nuts2 (parallel, up to 8 workers)"."""
+        params_desc = ", ".join(f"{param}={list_name}" for param, list_name in loop.get("parameters", {}).items())
+        mode = loop.get("mode", "sequential")
+        max_workers = loop.get("max_workers")
+        mode_desc = f"parallel, up to {max_workers} workers" if mode == "parallel" and max_workers else mode
+        return f"Looped over {params_desc} ({mode_desc})"
+
     async def show_task(self, task: dict) -> None:
         """Update the task in the ShowTask widget."""
         self.current_task = task
@@ -268,19 +278,34 @@ class ShowTask(Widget):
         database = self.modelflowapp.database
 
         sections = []
-        for task_name in pipeline.get("tasks", []):
+        for raw_entry in pipeline.get("tasks", []):
+            # Defensive: a model_flow.pipelines.json built by a pre-loop-feature
+            # version of model_flow still has plain task-name-string entries --
+            # treat those the same as a normalized no-overrides/no-loop entry
+            # (mirrors ExecutionEngine.execute_pipeline's own fallback).
+            entry = raw_entry if isinstance(raw_entry, dict) else {"task": raw_entry, "overrides": {}, "loop": None}
+            task_name = entry["task"]
             task = database.get_task(module, task_name) if database else None
             if not task:
                 continue
 
             sections.append(Static(task_name, classes="pipeline-task-header"))
+
+            loop = entry.get("loop")
+            if loop:
+                # Loop-driven steps are declared in the JSON only -- no per-iteration
+                # editing UI, just a read-only summary of what will run.
+                sections.append(Static(self._describe_loop(loop), classes="pipeline-loop-summary"))
+                continue
+
+            entry_overrides = entry.get("overrides") or {}
             history = database.get_user_values(module, task_name) if database else {}
 
             for param in task.get("config", []):
                 script_name = param.get("script_name")
                 if not script_name:
                     continue
-                default_value = str(param.get("script_value", ""))
+                default_value = str(entry_overrides.get(script_name, param.get("script_value", "")))
                 widget_id = self._pipeline_widget_id(task_name, script_name)
                 self.pipeline_param_defaults[widget_id] = (task_name, script_name, default_value)
 
@@ -552,8 +577,9 @@ class ModelFlowApp(App):
         self.selected_task = None  # (module, task_name) of the currently selected task
         self.selected_pipeline = None  # (module, pipeline_name) of the currently selected pipeline
         self.startup_error = None
-        self.current_process = None  # subprocess.Popen of the task currently running, if any
-        self.execution_cancelled = False  # set just before terminating current_process
+        self.current_processes = []  # live subprocess.Popen(s) for the run in progress, if any --
+                                      # a parallel pipeline loop step can have more than one at once
+        self.execution_cancelled = False  # set just before terminating current_processes
 
         try:
             self.database = Database(self.config)
@@ -652,7 +678,7 @@ class ModelFlowApp(App):
         """Execute the currently selected task with any user-edited parameter overrides."""
         if not self.database or not self.engine or not self.selected_task or not self.execute_panel:
             return
-        if self.current_process is not None and self.current_process.poll() is None:
+        if any(p.poll() is None for p in self.current_processes):
             return  # a task is already running -- ctrl+k aborts it first
 
         module, task_name = self.selected_task
@@ -674,7 +700,7 @@ class ModelFlowApp(App):
         # Give action_kill_task something to terminate() -- safe to call from another
         # thread than the one reading the process's output.
         def on_process_start(process) -> None:
-            self.current_process = process
+            self.current_processes.append(process)
 
         try:
             result = await asyncio.to_thread(
@@ -688,14 +714,14 @@ class ModelFlowApp(App):
                 on_process_start,
             )
         except Exception as e:
-            self.current_process = None
+            self.current_processes = []
             if self.execution_cancelled:
                 self.execute_panel.show_aborted(module, task_name)
             else:
                 self.execute_panel.show_error(module, task_name, str(e))
             return
 
-        self.current_process = None
+        self.current_processes = []
         if self.execution_cancelled:
             self.execute_panel.show_aborted(module, task_name)
         else:
@@ -705,22 +731,23 @@ class ModelFlowApp(App):
             self.database.add_user_value(module, task_name, script_name, value)
 
     async def _execute_selected_pipeline(self) -> None:
-        """Execute every task in the currently selected pipeline, sequentially, in
-        declared order, stopping at the first task that fails -- mirrors the CLI's
-        run_pipeline semantics (model_flow.py's run_pipeline). Unlike a single-task
-        run, the output log is cleared once at the start and then accumulates every
-        task's streamed output in turn (announce_step updates the status/sub-title
-        between tasks without wiping that log)."""
+        """Execute the currently selected pipeline via ExecutionEngine.execute_pipeline,
+        which owns the whole per-task/per-iteration loop (including any List-driven
+        loops and their sequential/parallel execution) -- mirrors the CLI's
+        run_pipeline. The output log is cleared once at the start and then
+        accumulates every step's streamed output in turn; on_step_start (called
+        once per non-looped task and once per loop iteration, from the worker
+        thread running execute_pipeline) updates the status/sub-title and writes a
+        step header line without wiping that log."""
         if not self.database or not self.engine or not self.selected_pipeline or not self.execute_panel:
             return
-        if self.current_process is not None and self.current_process.poll() is None:
+        if any(p.poll() is None for p in self.current_processes):
             return  # a task is already running -- ctrl+k aborts it first
 
         module, pipeline_name = self.selected_pipeline
         pipeline = self.database.get_pipeline(module, pipeline_name)
         if not pipeline:
             return
-        task_names = pipeline.get("tasks", [])
 
         show_task_widget = self.query_one("#show-task", ShowTask)
         pipeline_overrides = show_task_widget.get_pipeline_overrides()
@@ -729,83 +756,95 @@ class ModelFlowApp(App):
         if self.main_view:
             self.main_view.display = False
         self.execution_cancelled = False
+        self.current_processes = []
         self.execute_panel.output_log.clear()
         self.execute_panel.announce_step(f"Running pipeline {module}/{pipeline_name}... (ctrl+k to abort)")
 
         # Give action_kill_task something to terminate() -- safe to call from another
-        # thread than the one reading the process's output.
+        # thread than the one reading the process's output. A parallel loop step can
+        # start several processes before any of them finishes, so this accumulates.
         def on_process_start(process) -> None:
-            self.current_process = process
+            self.current_processes.append(process)
 
-        for index, task_name in enumerate(task_names, start=1):
-            overrides = pipeline_overrides.get(task_name, {})
-            step = f"[{index}/{len(task_names)}]"
-            self.execute_panel.announce_step(
-                f"Running pipeline {module}/{pipeline_name} {step}: {task_name}... (ctrl+k to abort)"
+        def on_output(line: str) -> None:
+            self.call_from_thread(self.execute_panel.append_output, line)
+
+        # Tracks the most recently started step so the final status line can say
+        # "failed at <task_name>"/"succeeded (N steps)" the way a single-task-at-a-
+        # time loop naturally could -- execute_pipeline itself only returns a code.
+        progress = {"task_name": None, "total_steps": 0}
+
+        def on_step_start(step_index, total_steps, task_name, iteration_index, total_iterations,
+                           iteration_values) -> None:
+            progress["task_name"] = task_name
+            progress["total_steps"] = total_steps
+            step = f"[{step_index}/{total_steps}]"
+            if total_iterations > 1:
+                values_desc = ", ".join(f"{k}={v}" for k, v in iteration_values.items())
+                iter_desc = f" iteration {iteration_index}/{total_iterations} ({values_desc})"
+            else:
+                iter_desc = ""
+            message = f"Running pipeline {module}/{pipeline_name} {step}: {task_name}{iter_desc}... (ctrl+k to abort)"
+            self.call_from_thread(self.execute_panel.announce_step, message)
+            self.call_from_thread(self.execute_panel.output_log.write_line, f"=== {step} {task_name}{iter_desc} ===")
+
+        try:
+            returncode = await asyncio.to_thread(
+                self.engine.execute_pipeline,
+                module,
+                pipeline_name,
+                None,
+                True,
+                on_output,
+                on_process_start,
+                on_step_start,
+                pipeline_overrides,
             )
-            self.execute_panel.output_log.write_line(f"=== {step} {task_name} ===")
+        except Exception as e:
+            self.current_processes = []
+            self.execute_panel.finish_running()
+            if self.execution_cancelled:
+                self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, aborted")
+                self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} aborted")
+            else:
+                self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name} failed to start: {e}")
+                self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} failed to start: {e}")
+            return
 
-            def on_output(line: str) -> None:
-                self.call_from_thread(self.execute_panel.append_output, line)
+        self.current_processes = []
 
-            try:
-                result = await asyncio.to_thread(
-                    self.engine.execute_task,
-                    module,
-                    task_name,
-                    None,
-                    overrides,
-                    True,
-                    on_output,
-                    on_process_start,
-                )
-            except Exception as e:
-                self.current_process = None
-                self.execute_panel.finish_running()
-                if self.execution_cancelled:
-                    self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, aborted at {task_name}")
-                    self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} aborted")
-                else:
-                    self.execute_panel.output_log.write_line(f"Task {task_name} failed to start: {e}")
-                    self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} failed to start task {task_name}: {e}")
-                return
-
-            self.current_process = None
-
+        for task_name, overrides in pipeline_overrides.items():
             for script_name, value in overrides.items():
                 self.database.add_user_value(module, task_name, script_name, value)
 
-            if self.execution_cancelled:
-                self.execute_panel.finish_running()
-                self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, aborted at {task_name}")
-                self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} aborted")
-                return
-
-            returncode = result.returncode
-            self.execute_panel.output_log.write_line(f"Task {module}/{task_name}, finished (exit {returncode})")
-
-            if returncode != 0:
-                self.execute_panel.finish_running()
-                self.execute_panel.output_log.write_line(
-                    f"Pipeline {module}/{pipeline_name} stopped: task '{task_name}' {step} "
-                    f"failed (exit {returncode}). Remaining tasks not run."
-                )
-                self.execute_panel.set_status(
-                    f"Pipeline {module}/{pipeline_name} failed at {task_name} (exit {returncode})"
-                )
-                return
-
         self.execute_panel.finish_running()
-        self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, finished")
-        self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} succeeded ({len(task_names)} tasks)")
+        if self.execution_cancelled:
+            self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, aborted")
+            self.execute_panel.set_status(f"Pipeline {module}/{pipeline_name} aborted")
+        elif returncode != 0:
+            self.execute_panel.output_log.write_line(
+                f"Pipeline {module}/{pipeline_name} stopped: task '{progress['task_name']}' failed "
+                f"(exit {returncode}). Remaining tasks not run."
+            )
+            self.execute_panel.set_status(
+                f"Pipeline {module}/{pipeline_name} failed at {progress['task_name']} (exit {returncode})"
+            )
+        else:
+            self.execute_panel.output_log.write_line(f"Pipeline {module}/{pipeline_name}, finished")
+            self.execute_panel.set_status(
+                f"Pipeline {module}/{pipeline_name} succeeded ({progress['total_steps']} tasks)"
+            )
 
     def action_kill_task(self) -> None:
-        """Abort the currently running task, if any."""
-        if not self.execute_panel or not self.current_process or self.current_process.poll() is not None:
+        """Abort all currently running processes for the run in progress, if any --
+        a parallel pipeline loop step can have more than one live at once."""
+        live_processes = [p for p in self.current_processes if p.poll() is None]
+        if not self.execute_panel or not live_processes:
             return
         self.execution_cancelled = True
         self.execute_panel.set_status("Aborting...")
-        self.current_process.terminate()
+        for process in live_processes:
+            process.terminate()
 
     async def action_rebuild_database(self) -> None:
         """Rescan Code_directory, regenerate model_flow.db.json/model_flow.pipelines.json/
@@ -829,15 +868,15 @@ class ModelFlowApp(App):
 
         try:
             modules = await asyncio.to_thread(Parser.parse_modules, code_directory, on_file)
-            pipelines = await asyncio.to_thread(Parser.parse_pipelines, code_directory, modules, on_file)
             lists = await asyncio.to_thread(Parser.parse_lists, code_directory, on_file)
+            pipelines = await asyncio.to_thread(Parser.parse_pipelines, code_directory, modules, lists, on_file)
         except Exception as e:
             self.execute_panel.show_error("build", "model_flow.db.json", str(e))
             return
 
         # Update both this app's Database/Lists and the ExecutionEngine's own
-        # (separate) Database instance, so subsequent executions use the
-        # freshly-scanned tasks too.
+        # (separate) Database/Lists instances, so subsequent executions use the
+        # freshly-scanned tasks/pipelines/lists too.
         self.database.data = modules
         self.database.save()
         self.database.pipelines_data = pipelines
@@ -846,6 +885,7 @@ class ModelFlowApp(App):
         self.lists.save()
         self.engine.database.data = modules
         self.engine.database.pipelines_data = pipelines
+        self.engine.lists.lists_data = lists
 
         module_count = len(modules)
         task_count = sum(len(tasks) for tasks in modules.values())

@@ -97,7 +97,7 @@ Either mechanism produces the same `{script_name: value}` override map, applied 
 
 ## Pipelines
 
-A Pipeline is an ordered sequence of tasks within a single module, run one after another via `run_pipeline`. Execution is sequential and stops immediately at the first task that fails — later tasks in the pipeline are not run.
+A Pipeline is an ordered sequence of tasks within a single module, run one after another via `run_pipeline`. Execution is sequential and stops immediately at the first task (or, for a looped task, the first failing iteration/step) that fails — later tasks are not run.
 
 Pipelines are declared, per module, in a `model_flow.pipelines.json` file placed inside that module's folder in `Code_directory` (a sibling of the module's task scripts):
 
@@ -108,16 +108,48 @@ Pipelines are declared, per module, in a `model_flow.pipelines.json` file placed
     {
       "name": "run_all",
       "description": "Runs the full policy pipeline end-to-end.",
-      "tasks": ["1_create_policy_data", "2_apply_ecoscheme", "3_export_results"]
+      "tasks": [
+        "1_create_policy_data",
+        {
+          "task": "2_apply_ecoscheme",
+          "overrides": { "scenario": "baseline" }
+        },
+        {
+          "task": "3_export_results",
+          "loop": {
+            "parameters": { "nuts_code": "nuts2" },
+            "mode": "parallel",
+            "max_workers": 8
+          }
+        }
+      ]
     }
   ]
 }
 ```
 
 - `module` (required) — must match a module name that at least one `Task` in `Code_directory` actually declares via its own `@MODELFLOW_task module="..."` annotation.
-- `pipelines` — a list of `{name, tasks, description?}` objects. `tasks` is an ordered list of **task names** (matching each task's own `name`, not its filename); every referenced task must belong to that same module — a pipeline cannot span modules.
+- `pipelines` — a list of `{name, tasks, description?}` objects.
+- `tasks` is an ordered list of steps. Each entry is either:
+  - a plain **task name** string (matching that task's own `name`, not its filename) — runs once, with no overrides, exactly as before; or
+  - an object `{task, overrides?, loop?}`:
+    - `task` (required) — same task-name rule as the plain-string form.
+    - `overrides` (optional) — a static `{script_name: value}` map applied on top of the task's own config defaults every run/iteration. Keys must be real parameter names (`script_name`) declared in that task's own `@MODELFLOW_config` annotations.
+    - `loop` (optional) — run the task once per value/combination drawn from one or more named [Lists](#lists) instead of just once:
+      - `parameters` (required) — a `{script_name: list_name}` map; each `script_name` must belong to the task's config (and must not also appear in `overrides`), and each `list_name` must be a List declared somewhere in `Code_directory`.
+      - `combine` — `"zip"` (pairwise, all referenced Lists must have equal length) or `"product"` (full cartesian combination of every referenced List). Required only when `parameters` has more than one entry; irrelevant (and omittable) for a single parameter.
+      - `mode` — `"sequential"` (default, stops the whole pipeline at the first failing iteration) or `"parallel"` (all iterations run to completion regardless of any single failure; the step — and pipeline — is judged failed afterwards if any iteration failed).
+      - `max_workers` — optional positive integer cap on concurrent iterations for `"parallel"` mode; defaults to `min(iteration_count, cpu_count)` if omitted.
 
-`model_flow build` discovers every module's `model_flow.pipelines.json`, validates each pipeline's task list, and aggregates the result into `model_flow.pipelines.json` in `Database_directory` — mirroring how `model_flow.db.json` aggregates task annotations. Invalid entries (an unknown task, a missing `module`, a duplicate pipeline name) are dropped with a warning rather than failing the whole build, same as task-parsing warnings elsewhere.
+Every referenced `task` must still belong to that pipeline's own module — a pipeline cannot span modules (unchanged from before).
+
+A single unknown task name, unknown/overlapping override or loop-parameter key, unknown list name, mismatched `"zip"` list lengths, or invalid `combine`/`mode` value invalidates the **whole pipeline** (warn-and-skip), not just that one step — consistent with how an unknown plain task name already behaved.
+
+A loop step's iterations each run against their own output subdirectory (`output_dir/<task_name>/<param>=<value>__...`) so repeated runs of the same task don't collide on output filenames (in particular, `.rmd` tasks generate an output filename with only minute-granularity, which would otherwise collide across iterations run within the same clock minute).
+
+`model_flow build` discovers every module's `model_flow.pipelines.json`, validates each pipeline (including the loop rules above, cross-checked against the also-discovered [Lists](#lists)), and aggregates the result into `model_flow.pipelines.json` in `Database_directory` — mirroring how `model_flow.db.json` aggregates task annotations. Every `tasks` entry is normalized to the `{task, overrides, loop}` object shape in the aggregated file regardless of how it was authored, so downstream consumers (the CLI, the GUI) never need to handle both shapes. Invalid entries are dropped with a warning rather than failing the whole build, same as task-parsing warnings elsewhere.
+
+The GUI's pipeline tree lets you browse and run existing pipelines (including editing a non-looped task's parameters for one run, and List-driven loop steps end-to-end via `ctrl+r`) — it doesn't yet support authoring new pipeline definitions or loops from within the GUI itself; those are still hand-authored as `model_flow.pipelines.json`.
 
 ## Lists
 
@@ -147,7 +179,7 @@ Unlike tasks and pipelines, lists aren't scanned via a script annotation — the
 
 `model_flow.lists_user.json`, also in `Database_directory`, is where each user defines their own lists, without touching the build-generated source file. It's optional and only needs to exist once something has actually been added to it.
 
-(Lists are a reference/lookup mechanism, not yet read by any `model_flow` command — this is groundwork for future features that consume named value sets, e.g. driving a task or pipeline once per element.)
+Lists are consumed by a pipeline task's `loop` declaration (see [Pipelines](#pipelines)), which runs that task once per element (or combination of elements, across several Lists) instead of just once. Outside of pipeline loops, Lists remain a plain reference/lookup mechanism — nothing else in `model_flow` reads them yet.
 
 ## Command line
 
@@ -210,7 +242,7 @@ Run a task
 
 ### run_pipeline
 
-Run every task in a pipeline, sequentially, in the order declared in `model_flow.pipelines.json`. Stops immediately at the first task that returns a non-zero exit code — later tasks are not run. Per-task parameter overrides (`--set`) are not supported yet.
+Run every task in a pipeline, in the order declared in `model_flow.pipelines.json`. Stops immediately at the first task (or, for a looped task, the first failing iteration) that returns a non-zero exit code — later tasks are not run. Per-task overrides and List-driven sequential/parallel loops are declared directly in `model_flow.pipelines.json` (see [Pipelines](#pipelines)) — there's no CLI flag for them; `run_pipeline` itself takes no `--set`/`--range`/`--values`/`--parallel` flags.
 
 - Required Parameters:
   - --config \<file>       Path to configuration JSON file
