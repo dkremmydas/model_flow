@@ -142,23 +142,30 @@ class Task:
                 elif key == "config":
                     config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
 
-                    # The only valid parameter definition is the quoted form:
-                    #   SET "VAR=value"
-                    # A bare/unquoted "set VAR=value" or a guarded "if not defined VAR set VAR=value"
-                    # is not recognized -- if the line after the annotation doesn't match, warn and
+                    # The only valid parameter definition is the guarded, quoted form:
+                    #   IF NOT DEFINED VAR SET "VAR=value"
+                    # The guard means the SET only fires when the variable hasn't already been
+                    # supplied via the environment, so an externally-injected override (--set/GUI)
+                    # actually survives the script running -- unlike a bare unconditional SET.
+                    # A bare/unquoted "set VAR=value", the old unguarded "SET \"VAR=value\"", or a
+                    # guard/SET referring to different variable names are all rejected: warn and
                     # skip this parameter entirely rather than recording a malformed entry.
                     next_line = lines[line_number].strip() if line_number < len(lines) else ""
 
-                    default_match = re.match(r'^set\s+"(\w+)=(.*?)"\s*$', next_line, re.IGNORECASE)
+                    default_match = re.match(
+                        r'^if\s+not\s+defined\s+(\w+)\s+set\s+"(\w+)=(.*?)"\s*$',
+                        next_line,
+                        re.IGNORECASE,
+                    )
 
-                    if default_match:
-                        config_attributes['script_name'] = default_match.group(1).strip()
-                        config_attributes['script_value'] = default_match.group(2).strip()
+                    if default_match and default_match.group(1).lower() == default_match.group(2).lower():
+                        config_attributes['script_name'] = default_match.group(2).strip()
+                        config_attributes['script_value'] = default_match.group(3).strip()
                         self.config.append(config_attributes)
                     else:
                         print(
                             f"Warning: invalid MODELFLOW_config parameter in {self.file_path} "
-                            f"at line {line_number + 1}: expected SET \"VAR=value\", got: {next_line!r}"
+                            f'at line {line_number + 1}: expected IF NOT DEFINED VAR SET "VAR=value", got: {next_line!r}'
                         )
 
                 elif key == "description_start":

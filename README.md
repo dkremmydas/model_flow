@@ -81,9 +81,9 @@ This "read the next line" convention is why a config annotation must sit directl
 | `.r` | `#@MODELFLOW_...` | `name = value` (optionally trailing comma), e.g. `input_file = "data.csv",` |
 | `.rmd` | `#@MODELFLOW_...` (inside the `params:` YAML block) | `name: value`, e.g. `input_file: "data.csv"` |
 | `.gms` | `*@MODELFLOW_...` | `$ SET NAME "value"` |
-| `.bat` | `::@MODELFLOW_...` | `SET "NAME=value"` — quoted form only; nothing else is recognized (see below) |
+| `.bat` | `::@MODELFLOW_...` | `IF NOT DEFINED NAME SET "NAME=value"` — guarded, quoted form only; nothing else is recognized (see below) |
 
-If the line after a `.bat` `@MODELFLOW_config` annotation isn't exactly `SET "VAR=value"` (a bare `set VAR=value`, a guarded `if not defined VAR set VAR=value`, etc. all fail to match), the parser prints a warning and drops that config entry entirely rather than recording something malformed — this is a deliberate, narrow contract, not a bug.
+If the line after a `.bat` `@MODELFLOW_config` annotation isn't exactly `IF NOT DEFINED VAR SET "VAR=value"` (a bare `set VAR=value`, the old unguarded `SET "VAR=value"`, a guard/SET referring to different variable names, etc. all fail to match), the parser prints a warning and drops that config entry entirely rather than recording something malformed — this is a deliberate, narrow contract, not a bug.
 
 
 ### Overriding defaults at run time
@@ -93,7 +93,7 @@ The `script_value` captured from the script is only the *default*. It can be ove
 - CLI: `--set VAR value` (repeatable) on `run_task`.
 - GUI: editing a config row's `Input` field before pressing `ctrl+r`; previously-used values are remembered per task (`model_flow.db_user.json`) and offered again via a dropdown.
 
-Either mechanism produces the same `{script_name: value}` override map, applied to a deep copy of the task so the underlying database is never mutated — with the `.bat` caveat above.
+Either mechanism produces the same `{script_name: value}` override map, applied to a deep copy of the task so the underlying database is never mutated.
 
 ## Pipelines
 
@@ -429,15 +429,17 @@ params:
 
 Batch files use `::` as the annotation comment character (a `::`-prefixed line is always safely ignored by `cmd.exe`, unlike `REM`, which needs a trailing space to be parsed as a comment).
 
-The **only** valid form for a config parameter's value line is the quoted assignment:
+The **only** valid form for a config parameter's value line is the guarded, quoted assignment:
 
 ```bat
-SET "VAR=value"
+IF NOT DEFINED VAR SET "VAR=value"
 ```
 
-An unquoted `set VAR=value`, a guarded `if not defined VAR set VAR=value`, or anything else is **not** recognized — if the line after a `::@MODELFLOW_config` annotation doesn't match this exact form, `model_flow` prints a warning and skips that parameter (it won't appear in `model_flow.db.json`, and parsing continues with the rest of the file).
+The guard is what makes overrides work: the `SET` only fires when the variable hasn't already been supplied via the environment, so a value `model_flow` injects before launching the script isn't immediately clobbered by the script's own default.
 
-**Note on overrides**: unlike R/GAMS, `.bat` config values are passed to the script as environment variables rather than command-line arguments (`cmd.exe`'s own argument parser splits on `=`, not just whitespace, so a `NAME=value` token can never survive as one positional argument). Because the required `SET "VAR=value"` form is unguarded, it always executes and overwrites whatever value was passed in — so **`--set`/GUI overrides currently have no effect on `.bat` tasks**; they always run with the script's own hardcoded value. This is a known, accepted limitation.
+An unquoted `set VAR=value`, the unguarded `SET "VAR=value"`, a guard/`SET` referring to different variable names, or anything else is **not** recognized — if the line after a `::@MODELFLOW_config` annotation doesn't match this exact form, `model_flow` prints a warning and skips that parameter (it won't appear in `model_flow.db.json`, and parsing continues with the rest of the file).
+
+**Note on overrides**: unlike R/GAMS, `.bat` config values are passed to the script as environment variables rather than command-line arguments (`cmd.exe`'s own argument parser splits on `=`, not just whitespace, so a `NAME=value` token can never survive as one positional argument). With the required guarded form above, `--set`/GUI overrides now take effect for `.bat` tasks the same way they do for R/GAMS/Rmd tasks.
 
 ```bat
 ::@MODELFLOW_task name="install_deps" module="admin"
@@ -447,7 +449,7 @@ An unquoted `set VAR=value`, a guarded `if not defined VAR set VAR=value`, or an
 ::@MODELFLOW_description_end
 
 ::@MODELFLOW_config name="target_dir" role="parameter" type="string"
-SET "target_dir=C:\tools"
+IF NOT DEFINED target_dir SET "target_dir=C:\tools"
 
 echo Installing into %target_dir%
 ```

@@ -97,7 +97,7 @@ def test_bat_task_name_module_and_config(tmp_path):
     content = (
         '::@MODELFLOW_task name="install_deps" module="admin"\n'
         '::@MODELFLOW_config name="target_dir" role="parameter" type="string"\n'
-        'SET "target_dir=C:\\tools"\n'
+        'IF NOT DEFINED target_dir SET "target_dir=C:\\tools"\n'
     )
     task = Task(str(write(tmp_path, "script.bat", content)))
 
@@ -129,13 +129,48 @@ def test_bat_task_config_rejects_unquoted_set_with_warning(tmp_path, capsys):
     assert "invalid" in capsys.readouterr().out.lower()
 
 
-def test_bat_task_config_rejects_if_not_defined_guard_with_warning(tmp_path, capsys):
-    """The if-not-defined guard form is not a valid parameter definition either --
-    only a bare quoted SET "VAR=value" is."""
+def test_bat_task_config_accepts_if_not_defined_guard(tmp_path):
+    """The guarded, quoted form IF NOT DEFINED VAR SET "VAR=value" is the only
+    valid parameter definition -- the guard lets an externally-injected
+    override survive the script running, unlike an unconditional SET."""
     content = (
         '::@MODELFLOW_task name="install_deps" module="admin"\n'
         '::@MODELFLOW_config name="target_dir" role="parameter" type="string"\n'
-        "if not defined target_dir set target_dir=C:\\tools\n"
+        'IF NOT DEFINED target_dir SET "target_dir=C:\\tools"\n'
+    )
+    task = Task(str(write(tmp_path, "script.bat", content)))
+
+    assert task.config == [
+        {
+            "name": "target_dir",
+            "role": "parameter",
+            "type": "string",
+            "script_name": "target_dir",
+            "script_value": "C:\\tools",
+        }
+    ]
+
+
+def test_bat_task_config_rejects_unguarded_quoted_set_with_warning(tmp_path, capsys):
+    """The old unguarded quoted form SET "VAR=value" is no longer valid -- it
+    always clobbers an injected override, so only the guarded form is accepted."""
+    content = (
+        '::@MODELFLOW_task name="install_deps" module="admin"\n'
+        '::@MODELFLOW_config name="target_dir" role="parameter" type="string"\n'
+        'SET "target_dir=C:\\tools"\n'
+    )
+    task = Task(str(write(tmp_path, "script.bat", content)))
+
+    assert task.config == []
+    assert "invalid" in capsys.readouterr().out.lower()
+
+
+def test_bat_task_config_rejects_guard_variable_mismatch_with_warning(tmp_path, capsys):
+    """The guard variable and the SET variable must be the same name."""
+    content = (
+        '::@MODELFLOW_task name="install_deps" module="admin"\n'
+        '::@MODELFLOW_config name="target_dir" role="parameter" type="string"\n'
+        'IF NOT DEFINED other_var SET "target_dir=C:\\tools"\n'
     )
     task = Task(str(write(tmp_path, "script.bat", content)))
 
