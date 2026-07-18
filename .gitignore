@@ -53,6 +53,16 @@ dmypy.json
 # VS Code
 .vscode/
 *.code-workspace
+# ...except vscode-extension/'s own launch/task config, needed for its F5 debug workflow
+!vscode-extension/.vscode/
+!vscode-extension/.vscode/*.json
+
+# vscode-extension/ (Node/TypeScript)
+vscode-extension/node_modules/
+vscode-extension/out/
+vscode-extension/*.vsix
+# copied from the root annotation-spec.json by scripts/copy-spec.js at build time -- the root file is authoritative
+vscode-extension/annotation-spec.json
 
 # Logs and local databases
 *.log

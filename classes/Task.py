@@ -7,6 +7,26 @@ class Task:
     task details, and input/output/config variables as direct attributes.
     """
 
+    # Annotation-line patterns, per filetype. Hoisted to named constants (rather
+    # than inline literals in each _parse_file_* method) so they can be verified,
+    # via test/test_annotation_spec_matches_task_py.py, to stay in sync with
+    # annotation-spec.json -- the same patterns the vscode-extension/ helper
+    # reimplements in TypeScript for live in-editor diagnostics. Keep these two
+    # in sync: a change here without updating the spec fails that test.
+    ANNOTATION_PATTERN_R = r'^\s*#@MODELFLOW_(\w+)\s*(.*)$'
+    ANNOTATION_PATTERN_GAMS = r'^\*\s*@MODELFLOW_(\w+):?\s*(.*)$'
+    ANNOTATION_PATTERN_BAT = r'^::\s*@MODELFLOW_(\w+):?\s*(.*)$'
+
+    # Config annotation "next line" value patterns, per filetype.
+    CONFIG_VALUE_PATTERN_R = r'^(\w+)\s*=\s*(.*?)(?:,)?$'
+    CONFIG_VALUE_PATTERN_RMD = r'^(\w+)\s*:\s*(.*)$'
+    CONFIG_VALUE_PATTERN_GAMS = r'^\$\s*SET\s+(\w+)\s+(.*?)\s*$'
+    CONFIG_VALUE_PATTERN_BAT = r'^if\s+not\s+defined\s+(\w+)\s+set\s+"(\w+)=(.*?)"\s*$'
+
+    # Attribute key="value" pairs inside a task/config annotation line, shared
+    # across all filetypes.
+    ATTRIBUTE_PATTERN = r'(\w+)="([^"]+)"'
+
     def __init__(self, file_path):
         """
         Initialize the Task object with the provided file path.
@@ -61,7 +81,7 @@ class Task:
         """
 
         # Annotation pattern for GAMS
-        annotation_pattern = r'^\*\s*@MODELFLOW_(\w+):?\s*(.*)$'
+        annotation_pattern = self.ANNOTATION_PATTERN_GAMS
 
         isDescriptionLine = False
 
@@ -76,19 +96,19 @@ class Task:
                 value = value.strip()
 
                 if key == "task":
-                    task_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    task_attributes = {key: val for key, val in re.findall(self.ATTRIBUTE_PATTERN, value)}
                     self.name = task_attributes.get("name", False)
                     self.module = task_attributes.get("module", False)
 
                 elif key == "config":
-                    config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    config_attributes = {key: val for key, val in re.findall(self.ATTRIBUTE_PATTERN, value)}
 
                     # Read the next line for the script values
                     if line_number < len(lines):
                         next_line = lines[line_number].strip()
 
                         # Match assignment in GAMS syntax
-                        default_match = re.match(r'^\$\s*SET\s+(\w+)\s+(.*?)\s*$', next_line, re.IGNORECASE)
+                        default_match = re.match(self.CONFIG_VALUE_PATTERN_GAMS, next_line, re.IGNORECASE)
 
                         if default_match:
                             config_attributes['script_name'] = default_match.group(1).strip()
@@ -120,7 +140,7 @@ class Task:
 
         # Annotation pattern for batch files (:: is the standard "comment" idiom;
         # cmd.exe always ignores it, unlike REM which needs a trailing space)
-        annotation_pattern = r'^::\s*@MODELFLOW_(\w+):?\s*(.*)$'
+        annotation_pattern = self.ANNOTATION_PATTERN_BAT
 
         isDescriptionLine = False
 
@@ -135,12 +155,12 @@ class Task:
                 value = value.strip()
 
                 if key == "task":
-                    task_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    task_attributes = {key: val for key, val in re.findall(self.ATTRIBUTE_PATTERN, value)}
                     self.name = task_attributes.get("name", False)
                     self.module = task_attributes.get("module", False)
 
                 elif key == "config":
-                    config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    config_attributes = {key: val for key, val in re.findall(self.ATTRIBUTE_PATTERN, value)}
 
                     # The only valid parameter definition is the guarded, quoted form:
                     #   IF NOT DEFINED VAR SET "VAR=value"
@@ -153,7 +173,7 @@ class Task:
                     next_line = lines[line_number].strip() if line_number < len(lines) else ""
 
                     default_match = re.match(
-                        r'^if\s+not\s+defined\s+(\w+)\s+set\s+"(\w+)=(.*?)"\s*$',
+                        self.CONFIG_VALUE_PATTERN_BAT,
                         next_line,
                         re.IGNORECASE,
                     )
@@ -189,38 +209,38 @@ class Task:
         """
         
         # Determine the annotation pattern based on the file extension
-        annotation_pattern = r'^\s*#@MODELFLOW_(\w+)\s*(.*)$'
-                    
-        isDescriptionLine = 0    
+        annotation_pattern = self.ANNOTATION_PATTERN_R
+
+        isDescriptionLine = 0
 
         for line_number, line in enumerate(lines, start=1):
             line = line.strip()
-            
+
             match = re.search(annotation_pattern, line)
-            
-            if match:            
+
+            if match:
                 key, value = match.groups()
                 key = key.strip()
                 value = value.strip()
 
-                
+
                 if key == "task":
-                    task_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    task_attributes = {key: val for key, val in re.findall(self.ATTRIBUTE_PATTERN, value)}
                     self.name = task_attributes.get("name", False)  # Default to False if "name" is not found
                     self.module = task_attributes.get("module", False)  # Default to False if "module" is not found
 
                 elif key == "config":
-                    config_attributes = {key: val for key, val in re.findall(r'(\w+)="([^"]+)"', value)}
+                    config_attributes = {key: val for key, val in re.findall(self.ATTRIBUTE_PATTERN, value)}
 
                     # Read the next line for the script values
                     if line_number < len(lines):
                         next_line = lines[line_number].strip()
-                        
+
                         if self.filetype == '.r':
-                            default_match = re.match(r'^(\w+)\s*=\s*(.*?)(?:,)?$', next_line)
+                            default_match = re.match(self.CONFIG_VALUE_PATTERN_R, next_line)
 
                         elif self.filetype == '.rmd':
-                            default_match = re.match(r'^(\w+)\s*:\s*(.*)$', next_line)
+                            default_match = re.match(self.CONFIG_VALUE_PATTERN_RMD, next_line)
                             
                         if default_match:
                             config_attributes['script_name'] = default_match.group(1).strip().replace('"', '')

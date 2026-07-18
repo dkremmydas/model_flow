@@ -341,6 +341,10 @@ A configuration variable (e.g. an input file, output file or another config vari
   - script_name: the name as defined in the script
   - script_value: the value that exist in the script
 
+### Editor support
+
+`vscode-extension/` (in this repo) is a VS Code extension that assists authoring the annotations above directly in your script files: commands that insert a correctly-formed `task`/`config`/`description_start`-`_end` block, live diagnostics flagging a malformed annotation or config value line before you ever run `build`, and hover help. See `vscode-extension/README.md` for install/development instructions.
+
 ## How to prepare files for model_flow
 
 For controlling the source files through the model_flow tool, they need to contains special chunks of code.

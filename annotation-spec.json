@@ -1,0 +1,43 @@
+{
+  "$comment": "Single source of truth for @MODELFLOW_* annotation syntax, shared between classes/Task.py (Python) and vscode-extension/ (TypeScript). Keeping these in sync is enforced by test/test_annotation_spec_matches_task_py.py -- if you change a pattern in Task.py, update it here too or that test will fail.",
+  "annotationKeys": ["task", "config", "description_start", "description_end"],
+  "attributePattern": "(\\w+)=\"([^\"]+)\"",
+  "attributesByKey": {
+    "task": ["name", "module"],
+    "config": ["name", "role", "type"]
+  },
+  "filetypes": {
+    ".r": {
+      "commentPrefix": "#",
+      "annotationPattern": "^\\s*#@MODELFLOW_(\\w+)\\s*(.*)$",
+      "annotationPatternFlags": "",
+      "configValuePattern": "^(\\w+)\\s*=\\s*(.*?)(?:,)?$",
+      "configValuePatternFlags": "",
+      "configValueExample": "input_file = \"data.csv\","
+    },
+    ".rmd": {
+      "commentPrefix": "#",
+      "annotationPattern": "^\\s*#@MODELFLOW_(\\w+)\\s*(.*)$",
+      "annotationPatternFlags": "",
+      "configValuePattern": "^(\\w+)\\s*:\\s*(.*)$",
+      "configValuePatternFlags": "",
+      "configValueExample": "input_file: \"data.csv\""
+    },
+    ".gms": {
+      "commentPrefix": "*",
+      "annotationPattern": "^\\*\\s*@MODELFLOW_(\\w+):?\\s*(.*)$",
+      "annotationPatternFlags": "",
+      "configValuePattern": "^\\$\\s*SET\\s+(\\w+)\\s+(.*?)\\s*$",
+      "configValuePatternFlags": "i",
+      "configValueExample": "$ SET LIMIT \"15\""
+    },
+    ".bat": {
+      "commentPrefix": "::",
+      "annotationPattern": "^::\\s*@MODELFLOW_(\\w+):?\\s*(.*)$",
+      "annotationPatternFlags": "",
+      "configValuePattern": "^if\\s+not\\s+defined\\s+(\\w+)\\s+set\\s+\"(\\w+)=(.*?)\"\\s*$",
+      "configValuePatternFlags": "i",
+      "configValueExample": "IF NOT DEFINED target_dir SET \"target_dir=C:\\tools\""
+    }
+  }
+}

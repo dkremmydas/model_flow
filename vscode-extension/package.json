@@ -1,0 +1,47 @@
+{
+  "name": "model-flow-annotations",
+  "displayName": "Model Flow Annotations",
+  "description": "Snippets, live diagnostics, and hover help for authoring @MODELFLOW_* annotations in R/R Markdown/GAMS/Batch scripts.",
+  "version": "0.1.0",
+  "publisher": "model-flow",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Snippets", "Linters", "Other"],
+  "activationEvents": [
+    "onLanguage:r",
+    "onLanguage:rmd",
+    "onLanguage:gams",
+    "onLanguage:bat",
+    "workspaceContains:**/*.gms"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "modelFlow.insertTaskAnnotation",
+        "title": "Model Flow: Insert Task Annotation"
+      },
+      {
+        "command": "modelFlow.insertConfigAnnotation",
+        "title": "Model Flow: Insert Config Annotation"
+      },
+      {
+        "command": "modelFlow.insertDescriptionBlock",
+        "title": "Model Flow: Insert Description Block"
+      }
+    ]
+  },
+  "scripts": {
+    "precompile": "node ./scripts/copy-spec.js",
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
