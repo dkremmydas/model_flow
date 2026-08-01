@@ -1,11 +1,11 @@
 # Model Flow
 
-**Model Flow is a tool supporting Workflow-Oriented Model Development (WOMD)** — a
+**Model Flow is a tool supporting Workflow-Oriented Modelling (WORM)** — a
 methodology for building computational models as modular, explicit, and
 reproducible data workflows.
 
 Instead of identifying a model solely with its mathematical formulation or its
-execution script, WOMD treats the complete chain of data preparation,
+execution script, WORM treats the complete chain of data preparation,
 parameterization, execution, validation, post-processing, and reporting as the
 **operational model**. Model execution is one stage among several, not the
 whole process.
@@ -176,7 +176,7 @@ execution, pipelines, and the GAMS/R Markdown/batch specifics are covered in
 - **Pipeline** — an ordered sequence of tasks within a single module, run
   automatically, stopping at the first failure.
 - **Workflow** — a model-level composition of modules. Conceptually part of
-  WOMD; not yet implemented in Model Flow.
+  WORM; not yet implemented in Model Flow.
 - **Job** — one execution instance of a task or pipeline.
 - **List** — a named, ordered collection of values (e.g. region codes) that a
   pipeline task can loop over.
@@ -342,7 +342,7 @@ author new pipeline definitions or loops — those are still hand-authored as
 `model_flow.pipelines.json`.
 
 **Planned**: Workflows (model-level composition of modules) are part of the
-Workflow-Oriented Model Development methodology but not yet implemented in
+Workflow-Oriented Modelling methodology but not yet implemented in
 Model Flow.
 
 ## Contributing
