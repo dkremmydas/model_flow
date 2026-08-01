@@ -1,105 +1,236 @@
-# Model flow
+# Model Flow
 
-## Introduction
+**Model Flow is a tool supporting Workflow-Oriented Model Development (WOMD)** — a
+methodology for building computational models as modular, explicit, and
+reproducible data workflows.
 
- In modular design, a model is comprised of many small independent scripts that transform input data into ouput data. This enables a modular structure that isolates the logic of individual tasks and allows the modular structure of a model. On the other hand, this compartmentalization of the model into numerous small independent tasks, makes it difficult to keep the overarching logic of the model. For this, model flow provides the infrastructure to organize the different small tasks in a more explicit way.
+Instead of identifying a model solely with its mathematical formulation or its
+execution script, WOMD treats the complete chain of data preparation,
+parameterization, execution, validation, post-processing, and reporting as the
+**operational model**. Model execution is one stage among several, not the
+whole process.
 
-## Terminology
+```text
+Source data
+    ↓
+Data preparation
+    ↓
+Validation
+    ↓
+Parameter estimation / calibration
+    ↓
+Model execution
+    ↓
+Post-processing
+    ↓
+Evaluation and reporting
+```
 
-A model is organized into *Modules*. Each *Module* is organized into *Tasks*. Here’s a glossary of key terms related with the tool.
+## The model as a workflow
 
-1. Module: A collection of Tasks with an overarching logic. By convention, a module is contained inside a unique folder.
+Scientific and economic models are usually described through their mathematical
+formulation or their central execution script. In practice, though, it helps to
+separate three things that are often bundled together under the single word
+"model":
 
-2. Task: A unit of work or operation to be performed. It corresponds to a single self-contained script. It follows the black-box pattern, where the script reads one or more input files and produces one or more output files. The user also control the behavior of the script with configuration parameters. A task belongs to a single module.
+- **Mathematical model** — the equations, assumptions, constraints, and
+  algorithms.
+- **Executable model** — the program that estimates, solves, or simulates the
+  mathematical model (an R script, a GAMS program, a solver run).
+- **Operational modelling workflow** — the full process that transforms source
+  data into validated, interpretable results: import, cleaning, validation,
+  parameterization, execution, post-processing, evaluation, reporting.
 
-3. Pipeline: A structured series of tasks, where the output of one task is the input for the next. It is automated with no manual/human intervention. A Module can have one or more pipelines. Apipeline beolongs to one module.
+Model Flow operates primarily at the third level. It does not replace the
+mathematical or executable model — it organizes the broader workflow in which
+model execution takes place.
 
-4. Workflow: A structured series of modules, where the output of one module is the input of another. Workflows belong to the model as a whole. They are not contained in modules.
+## Why Model Flow?
 
-5. Task Dependency: A relationship where one task relies on the completion of another task before it can begin.
+Modular model codebases usually consist of many small, independent scripts
+rather than one program: one script imports raw data, another validates it,
+another estimates parameters, another runs the solver, others post-process and
+report on the results. These scripts often span several languages (R, R
+Markdown, GAMS, batch files) and are chained together by convention — folder
+structure, filenames, launcher scripts, and the experience of whoever wrote
+them.
 
-6. Job: A single execution of a task, pipeline or workflow, often managed by a scheduler or orchestrator.
+That implicit structure works while the project is small and the original
+author is around. As the number of scripts grows, the overall logic of the
+model — which script depends on which, what each one expects as input, what it
+produces, how to rerun just one step — becomes difficult to see, communicate,
+or maintain.
 
-7. Scheduler: A system that determines when and in what order tasks should be executed.
+Model Flow makes this implicit workflow explicit: it describes scripts as
+**tasks**, groups them into **modules**, connects them into **pipelines**, and
+exposes each task's inputs, outputs, and configuration — all discovered from
+lightweight annotations already present in the scripts, without executing or
+importing them.
 
-8. Execution Engine: A system that runs tasks and handles their inputs, outputs, and dependencies.
+## Principles
 
-9. Annotations: In programming, annotations are additional information or metadata added to parts of code. They provide extra semantic meaning or instructions to tools, frameworks, or compilers without affecting the code's execution directly.
+- **Explicit transformations** — every meaningful data transformation is
+  represented as a task, not buried inside a larger script.
+- **Explicit interfaces** — every task declares its inputs, outputs, and
+  configurable parameters.
+- **Independent executability** — a task stays runnable and testable on its
+  own, outside Model Flow.
+- **Separation of logic and orchestration** — scripts contain the modelling
+  logic; Model Flow describes and controls how they're organized and run.
+- **Language independence** — tasks in different supported languages
+  participate in the same workflow.
+- **Artifact-based traceability** — intermediate files are first-class
+  outputs, inspectable and reproducible on their own.
+- **Incremental adoption** — existing scripts join the workflow by adding
+  annotation comments, not by being rewritten around a framework.
 
-## How the tool works
+## Conceptual architecture
 
-The tool works by:
+```text
+Model
+│
+├── Module: Data preparation
+│   └── Pipeline
+│       ├── Task: Import data
+│       ├── Task: Validate data
+│       └── Task: Transform data
+│
+├── Module: Model execution
+│   └── Pipeline
+│       ├── Task: Generate parameters
+│       ├── Task: Run solver
+│       └── Task: Export results
+│
+└── Module: Reporting
+    └── Pipeline
+        ├── Task: Aggregate results
+        └── Task: Generate report
+```
 
-1. In each self-contained script of the model, inline annotations provide meta-information on the task (e.g input and output files, configuration parameters, etc.)
+Tasks are the executable units; pipelines order tasks within a module.
+Model-level composition across modules (a **Workflow**) is part of the
+methodology's design but **not yet implemented** in the tool — see
+[Project status](#project-status-and-roadmap).
 
-2. The model_flow program parses the self-contained scripts of the model and looks for annotations. It creates the *model_flow.db.json* that serves as the database of the tasks and the pipelines.
+## Quick start
 
-3. The *model_flow.py* script contains commands that allows to execute a specific task or a pipeline, with the inline configuration. In case the user wants to override the default configuration, it can be done through command line parameters.
+### 1. Configure Model Flow
 
-4. A GUI allows to create/edit pipelines from tasks. It shows the available tasks per module. It allows to change the default script parameters.
+```json
+{
+  "Code_directory": "path/to/model/code",
+  "Database_directory": "path/to/model/database",
+  "Temporary_directory": "path/to/model/tmp",
+  "Rscript_exe": "C:/Program Files/R/R-4.x.x/bin/Rscript.exe",
+  "GAMS_exe": "C:/GAMS/gams.exe"
+}
+```
 
-## Tasks
+Save this as `model_flow.config.json`, or generate it interactively with
+`python model_flow.py init`.
 
-A Task is a single self-contained script — `.r`, `.rmd`, `.gms`, or `.bat` — that follows the black-box pattern: it reads zero or more input files, optionally accepts configuration parameters, and writes one or more output files. A task never registers itself anywhere external; instead it declares its own identity and configuration inline, as `@MODELFLOW_*` annotation comments, so that `model_flow build` can discover it just by scanning the file's text (no script is ever executed during discovery).
+### 2. Annotate a task
 
-### Declaring a task
+```r
+#@MODELFLOW_task name="prepare_data" module="data"
 
-A file becomes a task once it contains an `@MODELFLOW_task` annotation:
+#@MODELFLOW_description_start
+# Imports and prepares the model input data.
+#@MODELFLOW_description_end
+
+#@MODELFLOW_config name="input_file" role="input_file" relative="1"
+input_file = "raw/data.csv"
+
+#@MODELFLOW_config name="output_file" role="output_file" relative="1"
+output_file = "processed/data.csv"
+```
+
+### 3. Discover tasks
+
+```bash
+python model_flow.py build --config model_flow.config.json
+```
+
+### 4. Inspect available tasks
+
+```bash
+python model_flow.py list_tasks --config model_flow.config.json
+```
+
+### 5. Run the task
+
+```bash
+python model_flow.py run_task --config model_flow.config.json --module data --task prepare_data
+```
+
+That's the whole loop: annotate, build, inspect, run. Loops, parallel
+execution, pipelines, and the GAMS/R Markdown/batch specifics are covered in
+[Documentation](#documentation).
+
+## Core concepts
+
+- **Task** — the smallest executable unit: one self-contained script (`.r`,
+  `.rmd`, `.gms`, `.bat`) that reads inputs, accepts configuration, and writes
+  outputs.
+- **Module** — a collection of related tasks, conventionally one folder.
+- **Pipeline** — an ordered sequence of tasks within a single module, run
+  automatically, stopping at the first failure.
+- **Workflow** — a model-level composition of modules. Conceptually part of
+  WOMD; not yet implemented in Model Flow.
+- **Job** — one execution instance of a task or pipeline.
+- **List** — a named, ordered collection of values (e.g. region codes) that a
+  pipeline task can loop over.
+
+Full definitions, including implementation status for each, are in
+[docs/concepts.md](docs/concepts.md).
+
+## How Model Flow works
+
+```text
+Annotated source scripts
+          ↓
+    model_flow build
+          ↓
+model_flow.db.json
+model_flow.pipelines.json
+model_flow.lists.json
+          ↓
+       CLI / GUI
+          ↓
+   Task and pipeline jobs
+```
+
+1. Developers annotate existing scripts with `@MODELFLOW_*` comments.
+2. `model_flow build` scans the code directory and parses those annotations —
+   without executing any script.
+3. It writes machine-readable registries: `model_flow.db.json` (tasks),
+   `model_flow.pipelines.json` (pipelines), `model_flow.lists.json` (lists).
+4. The CLI or GUI reads those registries to inspect, configure, and execute
+   tasks and pipelines.
+
+## Task annotations
+
+A task's identity, description, and configuration are declared inline via
+`{C}@MODELFLOW_{annotation} [{attribute}="{value}"]*` comments, where `{C}` is
+the language's comment character (`#` in R/Rmd, `*` in GAMS, `::` in `.bat`):
 
 ```r
 #@MODELFLOW_task name="1_create_baseline_data" module="v.main2020/d.baseline"
-```
 
-- `name` — the task's identifier, used in `--task=` and shown in the GUI/CLI listings.
-- `module` — the module the task belongs to. Use a folder-like path (`"v.main2020/d.policy"`) to express nested modules.
-
-Free-text documentation goes between `@MODELFLOW_description_start` and `@MODELFLOW_description_end`; every line in between (that contains at least one letter) is appended to the task's `description`.
-
-### Configuration parameters
-
-Everything a task lets the user control — input files, output files, and plain parameters — is declared with `@MODELFLOW_config`, immediately followed by the line in the script that actually assigns the default value:
-
-```r
 #@MODELFLOW_config name="input_file" role="input_file" relative="0"
 input_file = "d.fadn/output/data.csv"
 ```
 
-- `name` — the logical name of the config entry (what `--set` and the GUI refer to).
-- `role` — one of `input_file`, `output_file`, `parameter`.
-- `type` — `number` or `string`; only meaningful when `role="parameter"`.
-- `relative` — `1` or `0`, only meaningful for `input_file`/`output_file`: whether the path is relative to `Database_directory`. Defaults to `1` (relative) if omitted.
+`@MODELFLOW_config` is always immediately followed by the line that actually
+assigns the value in the script — that's how a default is captured without
+running anything. The full attribute reference, the per-language value-line
+syntax, and how to override a default at run time are in
+[docs/task-annotations.md](docs/task-annotations.md).
 
-The **next line** in the script is not annotation — it's read directly by the parser to capture the script's own hard-coded default, split into two implicit attributes:
+## Pipelines and repeated execution
 
-- `script_name` — the variable name as it appears in the script (what actually gets passed back into the script at run time).
-- `script_value` — the literal default value currently written in the script.
-
-This "read the next line" convention is why a config annotation must sit directly above the assignment it describes, and why the required syntax of that assignment differs per language:
-
-| Filetype | Annotation prefix | Required syntax for the value line |
-| --- | --- | --- |
-| `.r` | `#@MODELFLOW_...` | `name = value` (optionally trailing comma), e.g. `input_file = "data.csv",` |
-| `.rmd` | `#@MODELFLOW_...` (inside the `params:` YAML block) | `name: value`, e.g. `input_file: "data.csv"` |
-| `.gms` | `*@MODELFLOW_...` | `$ SET NAME "value"` |
-| `.bat` | `::@MODELFLOW_...` | `IF NOT DEFINED NAME SET "NAME=value"` — guarded, quoted form only; nothing else is recognized (see below) |
-
-If the line after a `.bat` `@MODELFLOW_config` annotation isn't exactly `IF NOT DEFINED VAR SET "VAR=value"` (a bare `set VAR=value`, the old unguarded `SET "VAR=value"`, a guard/SET referring to different variable names, etc. all fail to match), the parser prints a warning and drops that config entry entirely rather than recording something malformed — this is a deliberate, narrow contract, not a bug.
-
-
-### Overriding defaults at run time
-
-The `script_value` captured from the script is only the *default*. It can be overridden per-run without touching the script:
-
-- CLI: `--set VAR value` (repeatable) on `run_task`.
-- GUI: editing a config row's `Input` field before pressing `ctrl+r`; previously-used values are remembered per task (`model_flow.db_user.json`) and offered again via a dropdown.
-
-Either mechanism produces the same `{script_name: value}` override map, applied to a deep copy of the task so the underlying database is never mutated.
-
-## Pipelines
-
-A Pipeline is an ordered sequence of tasks within a single module, run one after another via `run_pipeline`. Execution is sequential and stops immediately at the first task (or, for a looped task, the first failing iteration/step) that fails — later tasks are not run.
-
-Pipelines are declared, per module, in a `model_flow.pipelines.json` file placed inside that module's folder in `Code_directory` (a sibling of the module's task scripts):
+A pipeline chains tasks within one module and can repeat a task once per
+element of a List (see [docs/lists.md](docs/lists.md)), sequentially or in parallel:
 
 ```json
 {
@@ -107,20 +238,12 @@ Pipelines are declared, per module, in a `model_flow.pipelines.json` file placed
   "pipelines": [
     {
       "name": "run_all",
-      "description": "Runs the full policy pipeline end-to-end.",
       "tasks": [
         "1_create_policy_data",
-        {
-          "task": "2_apply_ecoscheme",
-          "overrides": { "scenario": "baseline" }
-        },
+        { "task": "2_apply_ecoscheme", "overrides": { "scenario": "baseline" } },
         {
           "task": "3_export_results",
-          "loop": {
-            "parameters": { "nuts_code": "nuts2" },
-            "mode": "parallel",
-            "max_workers": 8
-          }
+          "loop": { "parameters": { "nuts_code": "nuts2" }, "mode": "parallel", "max_workers": 8 }
         }
       ]
     }
@@ -128,364 +251,103 @@ Pipelines are declared, per module, in a `model_flow.pipelines.json` file placed
 }
 ```
 
-- `module` (required) — must match a module name that at least one `Task` in `Code_directory` actually declares via its own `@MODELFLOW_task module="..."` annotation.
-- `pipelines` — a list of `{name, tasks, description?}` objects.
-- `tasks` is an ordered list of steps. Each entry is either:
-  - a plain **task name** string (matching that task's own `name`, not its filename) — runs once, with no overrides, exactly as before; or
-  - an object `{task, overrides?, loop?}`:
-    - `task` (required) — same task-name rule as the plain-string form.
-    - `overrides` (optional) — a static `{script_name: value}` map applied on top of the task's own config defaults every run/iteration. Keys must be real parameter names (`script_name`) declared in that task's own `@MODELFLOW_config` annotations.
-    - `loop` (optional) — run the task once per value/combination drawn from one or more named [Lists](#lists) instead of just once:
-      - `parameters` (required) — a `{script_name: list_name}` map; each `script_name` must belong to the task's config (and must not also appear in `overrides`), and each `list_name` must be a List declared somewhere in `Code_directory`.
-      - `combine` — `"zip"` (pairwise, all referenced Lists must have equal length) or `"product"` (full cartesian combination of every referenced List). Required only when `parameters` has more than one entry; irrelevant (and omittable) for a single parameter.
-      - `mode` — `"sequential"` (default, stops the whole pipeline at the first failing iteration) or `"parallel"` (all iterations run to completion regardless of any single failure; the step — and pipeline — is judged failed afterwards if any iteration failed).
-      - `max_workers` — optional positive integer cap on concurrent iterations for `"parallel"` mode; defaults to `min(iteration_count, cpu_count)` if omitted.
+Pipelines are declared in a `model_flow.pipelines.json` file inside the
+module's folder, and run via `run_pipeline` or the GUI. Full validation rules,
+`zip`/`product` combinations, and output-directory behavior are in
+[docs/pipelines.md](docs/pipelines.md); lists are documented in
+[docs/lists.md](docs/lists.md).
 
-Every referenced `task` must still belong to that pipeline's own module — a pipeline cannot span modules (unchanged from before).
+## Supported languages
 
-A single unknown task name, unknown/overlapping override or loop-parameter key, unknown list name, mismatched `"zip"` list lengths, or invalid `combine`/`mode` value invalidates the **whole pipeline** (warn-and-skip), not just that one step — consistent with how an unknown plain task name already behaved.
+| Language      | File type | Annotation prefix |
+| ------------- | --------- | ------------------ |
+| R             | `.r`      | `#@MODELFLOW_`     |
+| R Markdown    | `.rmd`    | `#@MODELFLOW_`     |
+| GAMS          | `.gms`    | `*@MODELFLOW_`     |
+| Windows Batch | `.bat`    | `::@MODELFLOW_`    |
 
-A loop step's iterations each run against their own output subdirectory (`output_dir/<task_name>/<param>=<value>__...`) so repeated runs of the same task don't collide on output filenames (in particular, `.rmd` tasks generate an output filename with only minute-granularity, which would otherwise collide across iterations run within the same clock minute).
+Language-specific syntax and worked examples:
+[docs/r-tasks.md](docs/r-tasks.md),
+[docs/rmarkdown-tasks.md](docs/rmarkdown-tasks.md),
+[docs/gams-tasks.md](docs/gams-tasks.md),
+[docs/batch-tasks.md](docs/batch-tasks.md).
 
-`model_flow build` discovers every module's `model_flow.pipelines.json`, validates each pipeline (including the loop rules above, cross-checked against the also-discovered [Lists](#lists)), and aggregates the result into `model_flow.pipelines.json` in `Database_directory` — mirroring how `model_flow.db.json` aggregates task annotations. Every `tasks` entry is normalized to the `{task, overrides, loop}` object shape in the aggregated file regardless of how it was authored, so downstream consumers (the CLI, the GUI) never need to handle both shapes. Invalid entries are dropped with a warning rather than failing the whole build, same as task-parsing warnings elsewhere.
+## CLI and GUI
 
-The GUI's pipeline tree lets you browse and run existing pipelines (including editing a non-looped task's parameters for one run, and List-driven loop steps end-to-end via `ctrl+r`) — it doesn't yet support authoring new pipeline definitions or loops from within the GUI itself; those are still hand-authored as `model_flow.pipelines.json`.
+| Command        | Purpose                                        |
+| -------------- | ----------------------------------------------- |
+| `init`         | Interactively create the Model Flow config file |
+| `build`        | Discover tasks, pipelines, and lists            |
+| `list_tasks`   | List discovered tasks                           |
+| `show_task`    | Show one task's metadata                        |
+| `run_task`     | Execute one task                                |
+| `run_pipeline` | Execute a declared pipeline                     |
+| `run_gui`      | Launch the Textual-based GUI                    |
 
-## Lists
-
-A List is a named, ordered collection of values — e.g. the set of NUTS0 country codes or NUTS2 region codes used across a CAP model — kept in one place so scripts/parameters can reference it by name instead of every task repeating (and risking drifting copies of) the same values.
-
-Unlike tasks and pipelines, lists aren't scanned via a script annotation — there's no task/module involved. Instead, a `model_flow.lists.json` file can be placed in **any** folder of `Code_directory` (not just the root, and not one-per-module either — a folder either has one or it doesn't):
-
-```json
-{
-  "lists": [
-    {
-      "name": "nuts0",
-      "type": "string",
-      "description": "EU27 member state codes (NUTS level 0).",
-      "elements": ["AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "EL", "ES", "..."]
-    }
-  ]
-}
+```bash
+python model_flow.py run_task --config model_flow.config.json --module data --task prepare_data --set input_file=raw/other.csv
 ```
 
-- `name` — the list's identifier (must be unique across the whole `Code_directory` tree — a duplicate found in another folder is dropped with a warning, first-seen wins).
-- `type` — `string` or `number`; the type of every entry in `elements`.
-- `elements` — the ordered list of values.
-- `description` — optional free text.
-
-`model_flow build` (`Parser.parse_lists`) walks every folder of `Code_directory` looking for a `model_flow.lists.json`, collects every list it declares, tags each one with the folder it was found in (relative to `Code_directory`, forward slashes, `"."` for the root itself), and writes the aggregated result to `model_flow.lists.json` in `Database_directory` — mirroring how `model_flow.db.json`/`model_flow.pipelines.json` are themselves build-generated, not hand-maintained in `Database_directory` directly. For example, a list declared in `Code_directory/v.main2020/d.policy/model_flow.lists.json` ends up in the aggregated file as `{"name": "nuts2", ..., "folder": "v.main2020/d.policy"}`.
-
-`model_flow.lists_user.json`, also in `Database_directory`, is where each user defines their own lists, without touching the build-generated source file. It's optional and only needs to exist once something has actually been added to it.
-
-Lists are consumed by a pipeline task's `loop` declaration (see [Pipelines](#pipelines)), which runs that task once per element (or combination of elements, across several Lists) instead of just once. Outside of pipeline loops, Lists remain a plain reference/lookup mechanism — nothing else in `model_flow` reads them yet.
-
-## Command line
-
-The main executable is the model_flow script. We call it like
-
-<pre>
-python model_flow [command] [parameters]*
-</pre>
-
-The commands are:
-
-### init
-
-Initializes a configuration file. It asks for the database and th code directory and saves the configuration file into the database directory. When using model_flow for the first time, use this command.
-
-
-### build
-
-Recursively scans the specified code directory to identify all model tasks and creates a centralized database file (`model_flow.db.json`) in the configured Database_directory.
-
-- Required Parameters:
-
-  - --config \<file>       Path to configuration JSON file. The config file must contain,
-
-   ```json
-   {
-     "Code_directory": "path/to/model/code",
-     "Database_directory": "path/to/model/database"
-   }
-   ```
-
-### run_task
-
-Run a task
-
-- Required Parameters:
-  - --config \<file>       Path to configuration JSON file
-  - --module \<name>       Module containing the task (e.g., "v.main2020/d.policy")
-  - --task \<name>         Name of task to execute (e.g., "1_create_policy_data")
-- Optional parameters:
-  - --output_dir \<directory>   The directory where any log output will be saved. Default is the temporary directory
-- Parameter Overrides
-  - --set \<var> \<value>   Override a single configuration value; Can be specified multiple times; Example: --set input_file "data/new_input.csv"
-- Parallel Execution with Value Ranges:
-  - --parallel            Enable parallel execution mode
-  - --range \<var> \<start> \<end> \<step>    Execute with a numeric range of values; Example: --range threshold 0.1 1.0 0.2
-  - --values \<var> \<val1> \<val2>...       Execute with specific values;  Example: --values method "A" "B" "C"
-
-**Notes:**
-
-1. When using --parallel with ranges/values:
-   - The task will execute once for each combination of parameters
-   - All executions run in parallel (up to system limits)
-   - Output files should include parameter values to avoid conflicts
-
-2. Parameter types are automatically detected:
-   - Numbers (1, 3.14)
-   - Booleans (true, false)
-   - Strings (quoted if containing spaces)
-
-### run_pipeline
-
-Run every task in a pipeline, in the order declared in `model_flow.pipelines.json`. Stops immediately at the first task (or, for a looped task, the first failing iteration) that returns a non-zero exit code — later tasks are not run. Per-task overrides and List-driven sequential/parallel loops are declared directly in `model_flow.pipelines.json` (see [Pipelines](#pipelines)) — there's no CLI flag for them; `run_pipeline` itself takes no `--set`/`--range`/`--values`/`--parallel` flags.
-
-- Required Parameters:
-  - --config \<file>       Path to configuration JSON file
-  - --module \<name>       Module containing the pipeline (e.g., "v.main2020/d.policy")
-  - --pipeline \<name>     Pipeline name to execute
-- Optional parameters:
-  - --output_dir \<directory>   The directory where any log output will be saved. Default is the temporary directory. Applied to every task in the pipeline.
-
-- list_tasks: list the available tasks
-- Required parameters:
-  - --dir="{model root directory}"
-- Optional parameters:
-  - --module="{the module that contains the task}"
-
-### show_task
-
-Display detailed information about a specific task.
-
-- Required parameters:
-  - --dir="{model datababase directory}"
-  - --module="{the module that contains the task}"
-  - --pipeline="{the pipeline name}"
-
-### list_tasks
-
-List all available tasks with filtering options.
-
-- Required parameters:
-  - --config \<file>       Path to configuration JSON file
-- Optional parameters:
-  - --module="{the module that contains the task}"
-
-### Examples
-
-1. Basic execution:
-   - model_flow build --config "E:/IFM_CAP2/Code/conf/model_flow.config.json"
-   - model_flow list_tasks --module="d.estat" --config="E:/IFM_CAP2/Code/conf/model_flow.config.json"
-   - model_flow run_task --task="00_initialization" --module="d.fadn" --config="E:/IFM_CAP2/Database2020/model_flow.config.json"
-   - model_flow run_task --task="1_download_and_prepare" --module="d.estat" --output_dir="E:/IFM_CAP2/Database2020/d.estat" --config="E:/IFM_CAP2/Database2020/model_flow.config.json"
-   - model_flow run_task --task="1_import_agri_csv" --module="d.fadn" --output_dir="E:/IFM_CAP2/Database2020/d.fadn" --config="E:/IFM_CAP2/Code/conf/model_flow.config.json" --set root_csv "E:/IFM_CAP2/original_csv" --set raw_str_map "E:/IFM_CAP2/Model External Data/raw_str_map.2014_and_after.json"
-
-2. With parameter override:
-   model_flow run_task --config=config.json  --module=v.main2020/d.policy  --task=1_create_policy_data  --set year 2023  --set input_file "data/new_data.csv"
-
-3. Parallel execution with value range:
-   model_flow run_task --config=config.json  --module=model/training  --task=train_model  --parallel  --range learning_rate 0.001 0.01 0.002
-
-4. Parallel execution with specific values:
-   model_flow run_task --config=config.json  --module=model/training  --task=train_model  --parallel  --values optimizer "adam" "sgd"  --values batch_size 32 64 128
-
-## Annotations
-
-An annotation variable has the following form, {C}@MODELFLOW_{annotation} [{attribute name}="{attribute value}]*
-
-The {C} is the programming language specific comment character. For example in R, {C}=#, in GAMS, {C}=*. 
-
-Examples of valid annotations are below:
-
-- #@MODELFLOW_task name="Compile external data" module="d.econ_social_ind"
-- #@MODELFLOW_description_start
-- #@MODELFLOW_config name="external_data" type="parameter" relative="0"
-
-Attributes are of two types:
-
-- Explicit attributes: they are defined explicitly in the line of the annotation by the author of the script
-- Implicit attributes: they are automatically parsed from the source code 
-
-A list of accepted annotation their semantics and their attributes are below
-
-### @MODELFLOW_task
-
-Defines that the source file corresponds to a Task
-
-- Explicit attributes:
-  - name: the name of the task
-  - module: the module it belongs to. It should have a folder like structure. For example "v.main2020/p.scenar2020" or "d.fadn".
-- Implicit attributes
-
-### @MODELFLOW_description_start ... @MODELFLOW_description_end
-
-Defines lines that provide a description of the source file 
-
-- Implicit attributes
-  - description: Any lines between the start and the end of the annotation will be saved in the description attribute of the task
-
-### @MODELFLOW_config
-
-A configuration variable (e.g. an input file, output file or another config variable). The next line will have the default value in the file
-
-- Explicit attributes:
-  - name: the name of the variable
-  - role: {input_file, output_file, parameter}
-  - type: {number, string}; only for role=="parameter
-  - relative: {0,1} Relative to the DatabaseDirectory? 1=yes and 0=no; default is 1; only for role=={"input_file","output_file}
-- Implicit attributes:
-  - script_name: the name as defined in the script
-  - script_value: the value that exist in the script
-
-### Editor support
-
-`vscode-extension/` (in this repo) is a VS Code extension that assists authoring the annotations above directly in your script files: commands that insert a correctly-formed `task`/`config`/`description_start`-`_end` block, live diagnostics flagging a malformed annotation or config value line before you ever run `build`, and hover help. See `vscode-extension/README.md` for install/development instructions.
-
-## How to prepare files for model_flow
-
-For controlling the source files through the model_flow tool, they need to contains special chunks of code.
-
-The code ensures that the configuration of the script can be exposed to the flow tool.
-
-### GAMS files
-
-The gams file taks should contain the following code:
-
-```gams
-$IFTHENI.controlled NOT %CONTROLLED% == "1"
-
-$  SET CONFIG_VAR_1 "CONFIG_VALUE_1"
-
-$  SET CONFIG_VAR_2 "CONFIG_VALUE_2"
-
-$  SET CONFIG_VAR_N "CONFIG_VALUE_N"
-
-$ENDIF.controlled
-```
-
-An example of a gams file controlled with the flow tool is below.
-
-Anytime the script is called from an external srouce (e.g. cmd), the CONTROLLED global variable should be set to 1, e.g. gams script.gms --CONTROLLED=1.
-
-The code below allow, when running the gams file through the GAMS IDE, to consider the code configuration values, while to disregard them when the script is run outseide of the IDE.
-
-```gams
-$IFTHENI.controlled NOT %CONTROLLED% == "1"
-
-*$  SET BASELINE_DATA "v.main2020/p.2024_06_scenar2040/input/baseline_data.gdx"
-$  SET BASELINE_DATA "v.main2020/d.baseline/baseline_data.addAct_capriTr_pol2023_infl.bef_ECO.gdx"
-
-* The spatial resolution that the file is solved for.
-*  NUTS2,NUTS3,BATCH
-$  SET RUN_RESOLUTION "NUTS3"
-
-*  Defining which NUTS2 region(s) to run
-$  SET RUN_NUTS "BE211"
-
-*  The number of jobs the NUTS level will be splitted
-$  SET BATCH_JOB_NUMBER 1000
-
-*  The current job number
-$  SET BATCH_JOB_CUR 1
-
-*  Save debug information?
-$  SET DEBUG "YES"
-
-$  SET OUTPUT_FILE "v.main2020/d.baseline/ecoscheme_calibration/calibration_test_BE211.gdx"
-
-*  The ID of the farm(s) to run. If active, the model will run only for the selected farm(s). In case of
-*     more than one farm add farm codes using comma: 74000000020130,74000000020387,...,etc.
-$ SET RUNF_ID 615005400773
-
-
-
-* The voluntary eco-scheme to run. If active it will run only this eco-scheme.
-*  It still enforces the madnatory GAECs
-*$ SET RUN_ECO_VOL  "BE_FL-1.1 BE_FL-1.1"
-
-
-$ENDIF.controlled
-```
-
-### Rmd Files
-
-```rmd
----
-#@MODELFLOW_task name="1_create_baseline_data" module="v.main2020/d.baseline"
-title: "Create baseline data"
-author: "Lola Rey"
-output: 
-  html_document:
-    toc: true
-    toc_depth: 5
-params:
-  #@MODELFLOW_config name="database_dir" role="config_var" type="string" 
-  database_dir: "E:/IFM_CAP2/Database2020"
-  
-  #@MODELFLOW_config name="d_fadn_data_file" role="input_file" relative="0"
-  d_fadn_data_file: "d.fadn/ifm_cap_out/d_fadn_ifm_cap_data_2020.gdx"
-  
-  #@MODELFLOW_config name="calib_output" role="input_file" relative="0"
-  calib_output: "v.main2020/d.calibration/output_PMP.gdx"
-  
-  #@MODELFLOW_config name="feed_data" role="input_file" relative="0"
-  feed_data: "v.main2020/d.feed/output/estimations/d_feed_data_out_ALL.gdx"
-  
-  #@MODELFLOW_config name="add_acts_data" role="input_file" relative="0"
-  add_acts_data: "v.main2020/d.add_acts/default/output_add_acts.gdx"
-  
-  #@MODELFLOW_config name="capri_trend_file2020" role="input_file" relative="0"
-  capri_trend_file2020: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data/capri_data/d.baseline/res_2_1720scenar2040_refdefaulta.gdx" 
-  #capri_trend_file2040: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data/capri_data/d.baseline/res_2_1740scenar2040_refdefaulta.gdx"
-  
-  #@MODELFLOW_config name="capri_trend_file2040" role="input_file" relative="0"
-  capri_trend_file2040: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data/capri_data/p.2024_06_scenar2040/yield_20241013_from_scenar2030/res_2_1740scenar2040_refpol_exotechCSP_all_scenar2040defaulta.gdx"
-  
-  #@MODELFLOW_config name="CAP_payments" role="input_file" relative="0"
-  CAP_payments: "v.main2020/d.policy/02.payments_without_ecoschemes.gdx"
-  
-  #@MODELFLOW_config name="ECO_specs"  role="input_file" relative="0"
-  ECO_specs: "v.main2020/d.policy/02.ecoscheme_specification_conversion.gdx"
-  
-  #@MODELFLOW_config name="ECO_specs_farm_level"  role="input_file" relative="0"
-  ECO_specs_farm_level: "v.main2020/d.policy/02.ecoscheme_specification_farm_level.gdx"
-  
-  #@MODELFLOW_config name="external_data" type="parameter" type="string"
-  external_data: "U:/SCIENTIFIC/FARM @ U/30-Projects/01-IFM-CAP/04-Model External Data"
-  
-  #@MODELFLOW_config name="output_dir" type="parameter" type="string"
-  output_dir: "v.main2020/d.baseline/"
-  ```
-
-### Bat Files
-
-Batch files use `::` as the annotation comment character (a `::`-prefixed line is always safely ignored by `cmd.exe`, unlike `REM`, which needs a trailing space to be parsed as a comment).
-
-The **only** valid form for a config parameter's value line is the guarded, quoted assignment:
-
-```bat
-IF NOT DEFINED VAR SET "VAR=value"
-```
-
-The guard is what makes overrides work: the `SET` only fires when the variable hasn't already been supplied via the environment, so a value `model_flow` injects before launching the script isn't immediately clobbered by the script's own default.
-
-An unquoted `set VAR=value`, the unguarded `SET "VAR=value"`, a guard/`SET` referring to different variable names, or anything else is **not** recognized — if the line after a `::@MODELFLOW_config` annotation doesn't match this exact form, `model_flow` prints a warning and skips that parameter (it won't appear in `model_flow.db.json`, and parsing continues with the rest of the file).
-
-**Note on overrides**: unlike R/GAMS, `.bat` config values are passed to the script as environment variables rather than command-line arguments (`cmd.exe`'s own argument parser splits on `=`, not just whitespace, so a `NAME=value` token can never survive as one positional argument). With the required guarded form above, `--set`/GUI overrides now take effect for `.bat` tasks the same way they do for R/GAMS/Rmd tasks.
-
-```bat
-::@MODELFLOW_task name="install_deps" module="admin"
-
-::@MODELFLOW_description_start
-:: Installs required tools into the target directory.
-::@MODELFLOW_description_end
-
-::@MODELFLOW_config name="target_dir" role="parameter" type="string"
-IF NOT DEFINED target_dir SET "target_dir=C:\tools"
-
-echo Installing into %target_dir%
-```
+Full flags (including `--range`, `--values`, `--parallel`, `--output_dir`) are
+in [docs/cli-reference.md](docs/cli-reference.md).
+
+The GUI (`run_gui`) lets you browse modules/tasks/pipelines, edit parameters,
+run tasks and pipelines, and reuse previously entered values — see
+[docs/gui.md](docs/gui.md) for its current capabilities and limitations, and
+for the VS Code extension that assists with authoring annotations.
+
+## Generated files
+
+| File                          | Location            | Managed by | Purpose                          |
+| ------------------------------ | -------------------- | ---------- | --------------------------------- |
+| `model_flow.config.json`       | User-selected        | User       | Main directories and executables  |
+| `model_flow.pipelines.json`    | Inside each module    | User       | That module's pipeline definitions |
+| `model_flow.lists.json`        | Anywhere in code tree | User       | Hand-maintained list sources      |
+| `model_flow.db.json`           | Database directory    | `build`    | Aggregated task registry          |
+| `model_flow.pipelines.json`    | Database directory    | `build`    | Aggregated pipeline registry      |
+| `model_flow.lists.json`        | Database directory    | `build`    | Aggregated list registry          |
+| `model_flow.db_user.json`      | Database directory    | GUI        | Remembered per-task parameter history |
+| `model_flow.lists_user.json`   | Database directory    | User/GUI   | User-defined lists                |
+| `model_flow.pipelines_user.json` | Database directory  | User/GUI   | User-authored pipelines           |
+
+Note that `model_flow.pipelines.json` and `model_flow.lists.json` exist as two
+different things with the same filename: hand-authored sources scattered
+through `Code_directory`, and the single aggregated copy `build` writes into
+`Database_directory`.
+
+## Documentation
+
+- [docs/concepts.md](docs/concepts.md) — full glossary and implementation status
+- [docs/task-annotations.md](docs/task-annotations.md) — annotation reference
+- [docs/pipelines.md](docs/pipelines.md) — pipeline definition reference
+- [docs/lists.md](docs/lists.md) — list definition reference
+- [docs/cli-reference.md](docs/cli-reference.md) — full CLI reference
+- [docs/gui.md](docs/gui.md) — GUI and VS Code extension
+- [docs/r-tasks.md](docs/r-tasks.md) — R task syntax
+- [docs/rmarkdown-tasks.md](docs/rmarkdown-tasks.md) — R Markdown task syntax
+- [docs/gams-tasks.md](docs/gams-tasks.md) — GAMS task syntax
+- [docs/batch-tasks.md](docs/batch-tasks.md) — Batch task syntax
+
+## Project status and roadmap
+
+**Implemented**: task discovery and annotation parsing (R, R Markdown, GAMS,
+batch); module grouping; pipelines with static overrides and List-driven
+sequential/parallel loops; CLI (`init`, `build`, `list_tasks`, `show_task`,
+`run_task`, `run_pipeline`, `run_gui`); GUI browsing, parameter editing, task
+and pipeline execution, per-task value history; VS Code annotation support.
+
+**Partially implemented**: the GUI can browse and run existing pipelines,
+including editing a non-looped task's parameters for one run, but cannot yet
+author new pipeline definitions or loops — those are still hand-authored as
+`model_flow.pipelines.json`.
+
+**Planned**: Workflows (model-level composition of modules) are part of the
+Workflow-Oriented Model Development methodology but not yet implemented in
+Model Flow.
+
+## Contributing
+
+Issues and pull requests are welcome. If you're changing `classes/Task.py`'s
+annotation regexes, also update `annotation-spec.json` at the repo root — a
+test asserts the two stay in sync (see [CLAUDE.md](CLAUDE.md) for the full
+architecture notes this repository is developed against).
