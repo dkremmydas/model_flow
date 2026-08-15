@@ -1,5 +1,27 @@
+/* Default sizes -- overridden via inline style once the user drags a resize
+   handle (app.js) or a saved size is restored from localStorage on load. */
 #tree-pane {
     width: 320px;
+}
+
+.resize-handle {
+    flex-shrink: 0;
+    background: transparent;
+}
+
+.resize-handle:hover,
+.resize-handle.resizing {
+    background: var(--bs-primary);
+}
+
+.resize-handle-vertical {
+    width: 5px;
+    cursor: col-resize;
+}
+
+.resize-handle-horizontal {
+    height: 5px;
+    cursor: row-resize;
 }
 
 #tree-container .tree-module {
@@ -59,6 +81,7 @@
     margin-top: 1rem;
 }
 
+/* Default height -- see the .resize-handle comment above. */
 #output-pane {
     height: 220px;
 }

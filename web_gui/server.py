@@ -163,14 +163,19 @@ def create_app(config: Config) -> Flask:
             for module in database.list_modules()
         ])
 
-    @app.route("/api/task/<module>/<task_name>")
+    # <path:module> rather than the default <module> converter -- a task's
+    # @MODELFLOW_task module="..." attribute is a free-form string that some
+    # codebases use to mirror nested folder structure (e.g. "v.main2020/d.policy"),
+    # and the default converter's regex excludes "/", which would 404 for any
+    # such module even though the frontend correctly percent-encodes the slash.
+    @app.route("/api/task/<path:module>/<task_name>")
     def api_task(module, task_name):
         task = database.get_task(module, task_name)
         if task is None:
             return jsonify({"error": "task not found"}), 404
         return jsonify({"task": task, "history": database.get_user_values(module, task_name)})
 
-    @app.route("/api/pipeline/<module>/<pipeline_name>")
+    @app.route("/api/pipeline/<path:module>/<pipeline_name>")  # see api_task's comment above
     def api_pipeline(module, pipeline_name):
         pipeline = database.get_pipeline(module, pipeline_name)
         if pipeline is None:

@@ -121,6 +121,38 @@ def test_api_task_unknown_returns_404(tmp_path):
     assert resp.status_code == 404
 
 
+def write_db_with_slash_in_module_name(tmp_path):
+    """Some codebases give a task's @MODELFLOW_task module="..." attribute a
+    value that mirrors nested folder structure, e.g. "v.main2020/d.policy" --
+    a real module name, containing a literal '/', not a routing artifact."""
+    db_content = {
+        "v.main2020/d.policy": [
+            {
+                "module": "v.main2020/d.policy",
+                "file": "script.R",
+                "file_path": "C:\\scripts\\policy.R",
+                "filetype": ".r",
+                "name": "1_create_policy_data",
+                "description": "",
+                "config": [],
+            }
+        ]
+    }
+    (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+
+
+def test_api_task_handles_slash_in_module_name(tmp_path):
+    """Regression test: Flask's default route converter excludes '/', so a module
+    name containing one (mirroring nested folder structure) 404'd even though the
+    frontend correctly percent-encodes it as %2F -- the fix is <path:module>."""
+    write_db_with_slash_in_module_name(tmp_path)
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/task/v.main2020%2Fd.policy/1_create_policy_data")
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["name"] == "1_create_policy_data"
+
+
 def test_api_pipeline_returns_per_task_config_and_loop_summary(tmp_path):
     write_db_with_one_task_and_looped_pipeline(tmp_path)
     client = create_app(make_config(tmp_path)).test_client()
@@ -133,6 +165,21 @@ def test_api_pipeline_returns_per_task_config_and_loop_summary(tmp_path):
     assert task_entry["task_name"] == "1_test_task"
     assert task_entry["loop"]["parameters"] == {"ext_par": "some_list"}
     assert task_entry["loop_summary"] == "Looped over ext_par=some_list (sequential)"
+
+
+def test_api_pipeline_handles_slash_in_module_name(tmp_path):
+    write_db_with_slash_in_module_name(tmp_path)
+    pipelines_content = {
+        "v.main2020/d.policy": [
+            {"name": "full_run", "description": "", "tasks": ["1_create_policy_data"]}
+        ]
+    }
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/pipeline/v.main2020%2Fd.policy/full_run")
+    assert resp.status_code == 200
+    assert resp.get_json()["pipeline"]["name"] == "full_run"
 
 
 def test_api_run_task_missing_fields_returns_400(tmp_path):

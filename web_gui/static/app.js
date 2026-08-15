@@ -5,6 +5,7 @@
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
+const UI_STATE_KEY = "modelflow.ui";
 
 let treeData = [];
 let selection = null; // {kind: "task"|"pipeline", module, name}
@@ -21,6 +22,111 @@ function sanitizeId(value) {
     return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+// ---- Persisted UI state (layout sizes + last selection) -------------------
+// A page refresh should land back where the user left off rather than on a
+// blank "select a task" screen with default-sized panels.
+
+function loadUiState() {
+    try {
+        return JSON.parse(localStorage.getItem(UI_STATE_KEY)) || {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveUiState(patch) {
+    try {
+        localStorage.setItem(UI_STATE_KEY, JSON.stringify({ ...loadUiState(), ...patch }));
+    } catch (e) {
+        // localStorage unavailable (e.g. some private-browsing modes) -- persistence is a
+        // nice-to-have here, not a requirement, so just skip it rather than breaking the run.
+    }
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+// ---- Resizable panels -------------------------------------------------
+
+function applySavedLayout() {
+    const { treeWidth, outputHeight } = loadUiState();
+    if (treeWidth) {
+        document.getElementById("tree-pane").style.width = `${treeWidth}px`;
+    }
+    if (outputHeight) {
+        applyOutputHeight(outputHeight);
+    }
+}
+
+function applyOutputHeight(height) {
+    // #output-log's own height tracks #output-pane's, minus the status row/padding
+    // "chrome" above it -- kept as one offset constant rather than measuring, since
+    // that chrome's height doesn't change at runtime.
+    const HEADER_CHROME = 60;
+    document.getElementById("output-pane").style.height = `${height}px`;
+    document.getElementById("output-log").style.height = `${height - HEADER_CHROME}px`;
+}
+
+function setupTreeResize() {
+    const handle = document.getElementById("tree-resize-handle");
+    const treePane = document.getElementById("tree-pane");
+
+    handle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        handle.classList.add("resizing");
+        const startX = e.clientX;
+        const startWidth = treePane.getBoundingClientRect().width;
+        let finalWidth = startWidth;
+
+        function onMouseMove(moveEvent) {
+            finalWidth = clamp(startWidth + (moveEvent.clientX - startX), 180, 600);
+            treePane.style.width = `${finalWidth}px`;
+        }
+
+        function onMouseUp() {
+            handle.classList.remove("resizing");
+            document.removeEventListener("mousemove", onMouseMove);
+            document.removeEventListener("mouseup", onMouseUp);
+            saveUiState({ treeWidth: finalWidth });
+        }
+
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
+    });
+}
+
+function setupOutputResize() {
+    const handle = document.getElementById("output-resize-handle");
+    const outputPane = document.getElementById("output-pane");
+
+    handle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        handle.classList.add("resizing");
+        const startY = e.clientY;
+        const startHeight = outputPane.getBoundingClientRect().height;
+        let finalHeight = startHeight;
+
+        function onMouseMove(moveEvent) {
+            // The handle sits above the output pane, so dragging up (mouse Y decreases)
+            // should grow it -- hence startY - moveEvent.clientY rather than the reverse.
+            const maxHeight = window.innerHeight * 0.6;
+            finalHeight = clamp(startHeight + (startY - moveEvent.clientY), 120, maxHeight);
+            applyOutputHeight(finalHeight);
+        }
+
+        function onMouseUp() {
+            handle.classList.remove("resizing");
+            document.removeEventListener("mousemove", onMouseMove);
+            document.removeEventListener("mouseup", onMouseUp);
+            saveUiState({ outputHeight: finalHeight });
+        }
+
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
+    });
+}
+
 // ---- Tree ----------------------------------------------------------------
 
 function loadTree() {
@@ -29,7 +135,22 @@ function loadTree() {
         .then((data) => {
             treeData = data;
             renderTree(document.getElementById("search-input").value);
+            restoreSavedSelection();
         });
+}
+
+function restoreSavedSelection() {
+    const { selection: saved } = loadUiState();
+    if (!saved) return;
+    // Look the button up by data attributes rather than re-selecting directly --
+    // a module/task deleted since the last visit (e.g. after a rebuild) just won't
+    // be found here, so it's silently skipped instead of erroring.
+    for (const btn of document.querySelectorAll("#tree-container .tree-item")) {
+        if (btn.dataset.kind === saved.kind && btn.dataset.module === saved.module && btn.dataset.name === saved.name) {
+            btn.click();
+            return;
+        }
+    }
 }
 
 function renderTree(query) {
@@ -80,9 +201,13 @@ function makeTreeItem(module, name, kind) {
     btn.type = "button";
     btn.className = "tree-item";
     btn.textContent = name;
+    btn.dataset.module = module;
+    btn.dataset.name = name;
+    btn.dataset.kind = kind;
     btn.addEventListener("click", () => {
         document.querySelectorAll("#tree-container .tree-item.active").forEach((el) => el.classList.remove("active"));
         btn.classList.add("active");
+        saveUiState({ selection: { kind, module, name } });
         if (kind === "task") {
             selectTask(module, name);
         } else {
@@ -264,6 +389,7 @@ function startRun(fetchPromise, label) {
             document.getElementById("output-log").textContent = "";
             setStatus(`Running ${label}... `);
             setRunningUiState(true);
+            setWsIndicator("connecting");
             eventsSeen = 0;
             reconnectAttempts = 0;
             runTerminal = false;
@@ -315,6 +441,31 @@ function appendLog(line) {
     log.scrollTop = log.scrollHeight;
 }
 
+// ---- WebSocket connection indicator ----------------------------------------
+// Renders connectWebSocket's existing connecting/live/reconnecting/gave-up
+// states as a glanceable badge, instead of only being visible indirectly
+// through the status-line text.
+
+const WS_INDICATOR_STATES = {
+    connecting: { text: "Connecting…", cls: "text-bg-warning" },
+    live: { text: "Live", cls: "text-bg-success" },
+    reconnecting: () => ({ text: `Reconnecting… (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, cls: "text-bg-warning" }),
+    disconnected: { text: "Disconnected", cls: "text-bg-danger" },
+};
+
+function setWsIndicator(state) {
+    const el = document.getElementById("ws-indicator");
+    const entry = WS_INDICATOR_STATES[state];
+    if (!entry) {
+        el.className = "badge d-none";
+        el.textContent = "";
+        return;
+    }
+    const { text, cls } = typeof entry === "function" ? entry() : entry;
+    el.className = `badge ${cls}`;
+    el.textContent = text;
+}
+
 // ---- WebSocket streaming with reconnect-and-catch-up -----------------------
 
 function connectWebSocket(runId, fromIndex) {
@@ -323,6 +474,7 @@ function connectWebSocket(runId, fromIndex) {
 
     ws.onopen = () => {
         reconnectAttempts = 0;
+        setWsIndicator("live");
     };
 
     ws.onmessage = (event) => {
@@ -337,12 +489,14 @@ function connectWebSocket(runId, fromIndex) {
         }
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             setStatus(`${currentRunLabel}: connection lost -- task may still be running`);
+            setWsIndicator("disconnected");
             setRunningUiState(false);
             return;
         }
         const delay = RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts);
         reconnectAttempts += 1;
         setStatus(`${currentRunLabel}: connection lost, reconnecting...`);
+        setWsIndicator("reconnecting");
         setTimeout(() => connectWebSocket(runId, eventsSeen), delay);
     };
 }
@@ -365,6 +519,7 @@ function handleRunEvent(data) {
     } else if (data.type === "done") {
         runTerminal = true;
         setRunningUiState(false);
+        setWsIndicator("idle");
         const status = data.returncode === 0 ? "succeeded" : `failed (exit code ${data.returncode})`;
         appendLog(`${currentRunLabel}, finished`);
         setStatus(`${currentRunLabel} ${status}`);
@@ -376,9 +531,13 @@ function handleRunEvent(data) {
     } else if (data.type === "error") {
         runTerminal = true;
         setRunningUiState(false);
+        setWsIndicator("idle");
         appendLog(`${currentRunLabel}: ${data.message}`);
         setStatus(`${currentRunLabel} failed to start: ${data.message}`);
     }
 }
 
+applySavedLayout();
+setupTreeResize();
+setupOutputResize();
 loadTree();

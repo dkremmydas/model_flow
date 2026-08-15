@@ -1,0 +1,1 @@
+webgui - make the panels width/height adjustable by the user at real time. This will allow users to customize their workspace according to their preferences and improve usability.
