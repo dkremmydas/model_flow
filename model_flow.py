@@ -459,7 +459,26 @@ def main():
         required=False,
         help='Configuration file path (optional, defaults to config.json)'
     )
-    
+
+    # Add run_web_gui command
+    web_gui_parser = subparsers.add_parser('run_web_gui', help='Launch the browser-based GUI')
+    web_gui_parser.add_argument(
+        '--config',
+        required=False,
+        help='Configuration file path (optional, defaults to config.json)'
+    )
+    web_gui_parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help='Host to bind the web GUI server to (default: 127.0.0.1, i.e. local machine only)'
+    )
+    web_gui_parser.add_argument(
+        '--port',
+        type=int,
+        default=8765,
+        help='Port to bind the web GUI server to'
+    )
+
     args = parser.parse_args()
 
     # Show help if no arguments or --help flag
@@ -485,15 +504,18 @@ def main():
         
         print("\n7. run_gui - Launch the Textual-based GUI")
         print("   Usage: python model_flow.py run_gui [--config=<config_file>]")
-        
-        print("\n8. help - Show this help message")
+
+        print("\n8. run_web_gui - Launch the browser-based GUI")
+        print("   Usage: python model_flow.py run_web_gui [--config=<config_file>] [--host=<host>] [--port=<port>]")
+
+        print("\n9. help - Show this help message")
         print("   Usage: python model_flow.py --help")
         
         print("\nFor detailed help on each command, use: python model_flow.py <command> --help")
         sys.exit(0)
     
     # Check if the config file exists before proceeding
-    if args.command in ['build', 'run_task', 'run_pipeline', 'list_tasks', 'show_task', 'run_gui']:
+    if args.command in ['build', 'run_task', 'run_pipeline', 'list_tasks', 'show_task', 'run_gui', 'run_web_gui']:
         
         config = Config(args.config)  # Load the config file
         
@@ -529,9 +551,16 @@ def main():
             list_tasks(config, args.module)
         elif args.command == 'show_task':  # New command
             show_task(config, args.module, args.task)
-        elif args.command == 'run_gui':  # Launch the Textual GUI            
+        elif args.command == 'run_gui':  # Launch the Textual GUI
             app = ModelFlowApp(config)
             app.run()
+        elif args.command == 'run_web_gui':  # Launch the browser-based GUI
+            # Lazy import so `flask`/`flask-sock` stay optional dependencies for
+            # users who never touch the web GUI (unlike ModelFlowApp's top-of-file
+            # import, which makes `textual` a hard dependency of this whole module).
+            from web_gui.server import create_app
+            web_app = create_app(config)
+            web_app.run(host=args.host, port=args.port, threaded=True)
         else:
             parser.print_help()
             sys.exit(1)

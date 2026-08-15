@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Flow</title>
+<link rel="stylesheet" href="/bootstrap.min.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="d-flex flex-column vh-100">
+  <nav class="navbar navbar-dark bg-dark px-3 flex-shrink-0">
+    <span class="navbar-brand mb-0 h1">Model Flow</span>
+    <button id="rebuild-btn" class="btn btn-outline-light btn-sm">Rebuild database</button>
+  </nav>
+
+  <div class="flex-grow-1 d-flex overflow-hidden">
+    <div id="tree-pane" class="border-end p-2 overflow-auto flex-shrink-0">
+      <input id="search-input" type="text" class="form-control form-control-sm mb-2"
+             placeholder="Search modules/tasks...">
+      <div id="tree-container"></div>
+    </div>
+
+    <div id="detail-pane" class="p-3 overflow-auto flex-grow-1">
+      <div id="detail-empty" class="text-muted">Select a task or pipeline from the tree.</div>
+      <div id="detail-content" class="d-none">
+        <h4 id="detail-title"></h4>
+        <p id="detail-description" class="text-muted"></p>
+        <div id="detail-form"></div>
+        <button id="run-btn" class="btn btn-primary mt-2">Run</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="output-pane" class="border-top bg-body-tertiary p-2 flex-shrink-0">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <div id="status-line" class="fw-semibold">Select a task, then press Run.</div>
+      <button id="kill-btn" class="btn btn-outline-danger btn-sm" disabled>Kill</button>
+    </div>
+    <pre id="output-log" class="bg-dark text-light p-2 rounded mb-0"></pre>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

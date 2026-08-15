@@ -1,0 +1,70 @@
+#tree-pane {
+    width: 320px;
+}
+
+#tree-container .tree-module {
+    font-weight: 600;
+    margin-top: 0.5rem;
+}
+
+#tree-container .tree-group {
+    color: var(--bs-secondary-color);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    margin-top: 0.25rem;
+    margin-left: 0.5rem;
+}
+
+#tree-container .tree-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.15rem 0.5rem 0.15rem 1rem;
+    border: none;
+    background: none;
+    border-radius: 0.25rem;
+}
+
+#tree-container .tree-item:hover {
+    background: var(--bs-secondary-bg);
+}
+
+#tree-container .tree-item.active {
+    background: var(--bs-primary);
+    color: var(--bs-white);
+}
+
+.param-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.param-row .param-label {
+    width: 30%;
+    font-size: 0.9rem;
+}
+
+.param-row .param-input {
+    flex: 1 1 auto;
+}
+
+.param-row .param-history {
+    width: 30%;
+}
+
+.pipeline-task-header {
+    font-weight: 600;
+    margin-top: 1rem;
+}
+
+#output-pane {
+    height: 220px;
+}
+
+#output-log {
+    height: 160px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+}
