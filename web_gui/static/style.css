@@ -86,8 +86,26 @@
     height: 220px;
 }
 
-#output-log {
+#output-body {
     height: 160px;
+}
+
+#output-log {
     overflow-y: auto;
     font-size: 0.85rem;
+}
+
+#output-downloads {
+    max-height: 35%;
+    overflow-y: auto;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+#output-downloads a {
+    text-decoration: none;
+}
+
+#output-downloads a:hover {
+    text-decoration: underline;
 }

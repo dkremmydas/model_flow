@@ -17,6 +17,7 @@ let eventsSeen = 0;
 let reconnectAttempts = 0;
 let runTerminal = false; // true once a "done"/"error" event has been received for the current run
 let currentRunLabel = "";
+let currentRunId = null;
 
 function sanitizeId(value) {
     return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -60,12 +61,13 @@ function applySavedLayout() {
 }
 
 function applyOutputHeight(height) {
-    // #output-log's own height tracks #output-pane's, minus the status row/padding
-    // "chrome" above it -- kept as one offset constant rather than measuring, since
-    // that chrome's height doesn't change at runtime.
+    // #output-body (log + any download links) tracks #output-pane's height, minus
+    // the status row/padding "chrome" above it -- kept as one offset constant rather
+    // than measuring, since that chrome's height doesn't change at runtime. The log
+    // and downloads list split #output-body's height between themselves via flexbox.
     const HEADER_CHROME = 60;
     document.getElementById("output-pane").style.height = `${height}px`;
-    document.getElementById("output-log").style.height = `${height - HEADER_CHROME}px`;
+    document.getElementById("output-body").style.height = `${height - HEADER_CHROME}px`;
 }
 
 function setupTreeResize() {
@@ -386,7 +388,9 @@ function startRun(fetchPromise, label) {
                 return;
             }
             currentRunLabel = label;
+            currentRunId = body.run_id;
             document.getElementById("output-log").textContent = "";
+            clearRunOutputs();
             setStatus(`Running ${label}... `);
             setRunningUiState(true);
             setWsIndicator("connecting");
@@ -421,6 +425,13 @@ function runPipeline(module, pipelineName) {
 
 document.getElementById("rebuild-btn").addEventListener("click", () => {
     startRun(fetch("/api/rebuild", { method: "POST" }), "database rebuild");
+});
+
+document.getElementById("clear-btn").addEventListener("click", () => {
+    document.getElementById("output-log").textContent = "";
+    clearRunOutputs();
+    setStatus("Select a task, then press Run.");
+    setWsIndicator("idle");
 });
 
 document.getElementById("kill-btn").addEventListener("click", () => {
@@ -501,6 +512,47 @@ function connectWebSocket(runId, fromIndex) {
     };
 }
 
+// ---- Output file downloads --------------------------------------------------
+
+function clearRunOutputs() {
+    const container = document.getElementById("output-downloads");
+    container.innerHTML = "";
+    container.classList.add("d-none");
+}
+
+function showRunOutputs(runId) {
+    fetch(`/api/run/${runId}/outputs`)
+        .then((r) => r.json())
+        .then((groups) => {
+            const container = document.getElementById("output-downloads");
+            container.innerHTML = "";
+            if (!groups.length) {
+                container.classList.add("d-none");
+                return;
+            }
+            for (const group of groups) {
+                const header = document.createElement("div");
+                header.className = "fw-semibold small mt-1";
+                header.textContent = group.task;
+                container.appendChild(header);
+                for (const file of group.files) {
+                    const link = document.createElement("a");
+                    link.className = "d-block small";
+                    if (file.exists) {
+                        link.href = `/api/run/${runId}/outputs/${encodeURIComponent(group.module)}/${encodeURIComponent(group.task)}/${encodeURIComponent(file.script_name)}/download`;
+                        link.textContent = `${file.script_name}: ${file.value}`;
+                    } else {
+                        link.href = "#";
+                        link.classList.add("text-muted", "disabled");
+                        link.textContent = `${file.script_name}: ${file.value} (not found on disk)`;
+                    }
+                    container.appendChild(link);
+                }
+            }
+            container.classList.remove("d-none");
+        });
+}
+
 function handleRunEvent(data) {
     if (data.type === "output") {
         appendLog(data.line);
@@ -523,6 +575,9 @@ function handleRunEvent(data) {
         const status = data.returncode === 0 ? "succeeded" : `failed (exit code ${data.returncode})`;
         appendLog(`${currentRunLabel}, finished`);
         setStatus(`${currentRunLabel} ${status}`);
+        if (data.returncode === 0 && currentRunId) {
+            showRunOutputs(currentRunId);
+        }
         if (selection) {
             // Refresh the detail panel so a newly recorded history value shows up.
             if (selection.kind === "task") selectTask(selection.module, selection.name);

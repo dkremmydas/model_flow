@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_sock import Sock
 
 from classes.Config import Config
@@ -47,6 +47,11 @@ class RunRecord:
     condition: threading.Condition = field(default_factory=threading.Condition)
     done: bool = False
     process: Optional[object] = None  # subprocess.Popen, set via on_process_start
+    # [{"module", "task", "overrides"}] for each task that actually ran in this
+    # run -- one entry for a single task run, one per non-looped pipeline step
+    # for a pipeline run. Populated at run start, used by /api/run/<id>/outputs
+    # to resolve role="output_file" config entries against what was actually run.
+    outputs_info: List[dict] = field(default_factory=list)
 
     def append(self, event: dict) -> None:
         with self.condition:
@@ -126,6 +131,16 @@ def _launch(run_state: RunState, work) -> Optional[str]:
 
     threading.Thread(target=worker, daemon=True).start()
     return run_id
+
+
+def _resolve_output_path(config: Config, value: str, relative_flag) -> Path:
+    """Resolve a role="output_file" config entry's value to an actual filesystem
+    path: relative_flag == "0" means the value is already an absolute path, used
+    as-is; anything else (including unset, per docs/task-annotations.md's
+    documented default) resolves it relative to Database_directory."""
+    if relative_flag == "0":
+        return Path(value)
+    return Path(config.get("Database_directory")) / value
 
 
 def _describe_loop(loop: Dict) -> str:
@@ -208,6 +223,8 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "'module' and 'task' are required"}), 400
 
         def work(record: RunRecord):
+            record.outputs_info = [{"module": module, "task": task_name, "overrides": overrides}]
+
             def on_output(line):
                 record.append({"type": "output", "line": line})
 
@@ -237,6 +254,21 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "'module' and 'pipeline' are required"}), 400
 
         def work(record: RunRecord):
+            # One entry per non-looped step, with the same overrides merge order
+            # ExecutionEngine.execute_pipeline itself uses (entry's own "overrides"
+            # then extra_overrides) -- looped steps are skipped since a loop's
+            # output path may vary per iteration and isn't tracked per-iteration here.
+            pipeline = database.get_pipeline(module, pipeline_name) or {}
+            outputs_info = []
+            for raw_entry in pipeline.get("tasks", []):
+                entry = raw_entry if isinstance(raw_entry, dict) else {"task": raw_entry, "overrides": {}, "loop": None}
+                if entry.get("loop"):
+                    continue
+                step_task_name = entry["task"]
+                merged = {**(entry.get("overrides") or {}), **extra_overrides.get(step_task_name, {})}
+                outputs_info.append({"module": module, "task": step_task_name, "overrides": merged})
+            record.outputs_info = outputs_info
+
             def on_output(line):
                 record.append({"type": "output", "line": line})
 
@@ -319,6 +351,57 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "no running task to kill"}), 409
         record.process.terminate()
         return jsonify({"ok": True})
+
+    @app.route("/api/run/<run_id>/outputs")
+    def api_run_outputs(run_id):
+        record = run_state.get(run_id)
+        if record is None:
+            return jsonify({"error": "unknown run_id"}), 404
+
+        result = []
+        for info in record.outputs_info:
+            task = database.get_task(info["module"], info["task"])
+            if task is None:
+                continue
+            files = []
+            for param in task.get("config", []):
+                script_name = param.get("script_name")
+                if param.get("role") != "output_file" or not script_name:
+                    continue
+                value = info["overrides"].get(script_name, param.get("script_value"))
+                if value is None:
+                    continue
+                resolved = _resolve_output_path(config, value, param.get("relative"))
+                files.append({"script_name": script_name, "value": value, "exists": resolved.is_file()})
+            if files:
+                result.append({"module": info["module"], "task": info["task"], "files": files})
+        return jsonify(result)
+
+    # <path:module> for the same reason api_task/api_pipeline use it -- see their comment above.
+    @app.route("/api/run/<run_id>/outputs/<path:module>/<task_name>/<script_name>/download")
+    def api_download_output(run_id, module, task_name, script_name):
+        record = run_state.get(run_id)
+        if record is None:
+            return jsonify({"error": "unknown run_id"}), 404
+
+        info = next((i for i in record.outputs_info if i["module"] == module and i["task"] == task_name), None)
+        if info is None:
+            return jsonify({"error": "not found"}), 404
+
+        task = database.get_task(module, task_name)
+        param = next(
+            (p for p in (task.get("config", []) if task else [])
+             if p.get("role") == "output_file" and p.get("script_name") == script_name),
+            None,
+        )
+        if param is None:
+            return jsonify({"error": "not an output_file parameter"}), 404
+
+        value = info["overrides"].get(script_name, param.get("script_value"))
+        resolved = _resolve_output_path(config, value, param.get("relative"))
+        if not resolved.is_file():
+            return jsonify({"error": "file not found on disk"}), 404
+        return send_file(resolved, as_attachment=True)
 
     @sock.route("/ws/run/<run_id>")
     def ws_run(ws, run_id):

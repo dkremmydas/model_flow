@@ -41,9 +41,15 @@
         <div id="status-line" class="fw-semibold">Select a task, then press Run.</div>
         <span id="ws-indicator" class="badge d-none"></span>
       </div>
-      <button id="kill-btn" class="btn btn-outline-danger btn-sm" disabled>Kill</button>
+      <div>
+        <button id="clear-btn" class="btn btn-outline-secondary btn-sm">Clear</button>
+        <button id="kill-btn" class="btn btn-outline-danger btn-sm" disabled>Kill</button>
+      </div>
     </div>
-    <pre id="output-log" class="bg-dark text-light p-2 rounded mb-0"></pre>
+    <div id="output-body" class="d-flex flex-column overflow-hidden">
+      <pre id="output-log" class="bg-dark text-light p-2 rounded mb-0 flex-grow-1"></pre>
+      <div id="output-downloads" class="d-none"></div>
+    </div>
   </div>
 
   <script src="/app.js"></script>

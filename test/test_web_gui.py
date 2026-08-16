@@ -86,6 +86,41 @@ def write_db_with_one_task_and_looped_pipeline(tmp_path):
     (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
 
 
+def write_db_with_output_file_task(tmp_path):
+    """A task with one role="output_file" config entry (relative="0", so its
+    script_value is resolved as an absolute path as-is) alongside a plain
+    parameter -- for exercising /api/run/<id>/outputs and the download route."""
+    db_content = {
+        "test_module": [
+            {
+                "module": "test_module",
+                "file": "script.R",
+                "file_path": "C:\\scripts\\test_script.R",
+                "filetype": ".r",
+                "name": "1_test_task",
+                "description": "A test task.",
+                "config": [
+                    {
+                        "name": "ext_par",
+                        "role": "parameter",
+                        "type": "number",
+                        "script_name": "ext_par",
+                        "script_value": "5",
+                    },
+                    {
+                        "name": "output_file",
+                        "role": "output_file",
+                        "relative": "0",
+                        "script_name": "output_file",
+                        "script_value": str(tmp_path / "default_output.csv"),
+                    },
+                ],
+            }
+        ]
+    }
+    (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Plain HTTP routes (Flask test_client, no real server/socket needed)
 # ---------------------------------------------------------------------------
@@ -196,6 +231,22 @@ def test_api_kill_without_active_run_returns_409(tmp_path):
 
     resp = client.post("/api/kill")
     assert resp.status_code == 409
+
+
+def test_run_outputs_unknown_run_id_returns_404(tmp_path):
+    write_db_with_one_task(tmp_path)
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/run/does-not-exist/outputs")
+    assert resp.status_code == 404
+
+
+def test_download_output_unknown_run_id_returns_404(tmp_path):
+    write_db_with_one_task(tmp_path)
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/run/does-not-exist/outputs/test_module/1_test_task/output_file/download")
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +408,149 @@ def test_websocket_streams_live_output_and_records_history(tmp_path, monkeypatch
 
         history = client.get("/api/task/test_module/1_test_task").get_json()["history"]
         assert history == {"ext_par": ["99"]}
+
+
+def test_run_outputs_lists_output_file_entries_after_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", _FakePopenMultiLine)
+    write_db_with_output_file_task(tmp_path)
+    app = create_app(make_config(tmp_path))
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post("/api/run_task", json={"module": "test_module", "task": "1_test_task"})
+        run_id = resp.get_json()["run_id"]
+        asyncio.run(_collect_ws_events(f"{server.base_url}/ws/run/{run_id}?from=0"))
+
+        outputs = client.get(f"/api/run/{run_id}/outputs").get_json()
+        assert outputs == [
+            {
+                "module": "test_module",
+                "task": "1_test_task",
+                "files": [
+                    {
+                        "script_name": "output_file",
+                        "value": str(tmp_path / "default_output.csv"),
+                        "exists": False,
+                    }
+                ],
+            }
+        ]
+
+
+def test_run_outputs_reflects_override_used_for_that_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", _FakePopenMultiLine)
+    write_db_with_output_file_task(tmp_path)
+    app = create_app(make_config(tmp_path))
+    override_path = tmp_path / "custom_output.csv"
+    override_path.write_text("actual output", encoding="utf-8")
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post(
+            "/api/run_task",
+            json={"module": "test_module", "task": "1_test_task", "overrides": {"output_file": str(override_path)}},
+        )
+        run_id = resp.get_json()["run_id"]
+        asyncio.run(_collect_ws_events(f"{server.base_url}/ws/run/{run_id}?from=0"))
+
+        outputs = client.get(f"/api/run/{run_id}/outputs").get_json()
+        files = outputs[0]["files"]
+        assert files == [{"script_name": "output_file", "value": str(override_path), "exists": True}]
+
+
+def test_download_output_returns_file_content_when_it_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", _FakePopenMultiLine)
+    write_db_with_output_file_task(tmp_path)
+    app = create_app(make_config(tmp_path))
+    (tmp_path / "default_output.csv").write_bytes(b"a,b\n1,2\n")
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post("/api/run_task", json={"module": "test_module", "task": "1_test_task"})
+        run_id = resp.get_json()["run_id"]
+        asyncio.run(_collect_ws_events(f"{server.base_url}/ws/run/{run_id}?from=0"))
+
+        download = client.get(f"/api/run/{run_id}/outputs/test_module/1_test_task/output_file/download")
+        assert download.status_code == 200
+        assert download.data == b"a,b\n1,2\n"
+
+
+def test_download_output_returns_404_when_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", _FakePopenMultiLine)
+    write_db_with_output_file_task(tmp_path)
+    app = create_app(make_config(tmp_path))
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post("/api/run_task", json={"module": "test_module", "task": "1_test_task"})
+        run_id = resp.get_json()["run_id"]
+        asyncio.run(_collect_ws_events(f"{server.base_url}/ws/run/{run_id}?from=0"))
+
+        download = client.get(f"/api/run/{run_id}/outputs/test_module/1_test_task/output_file/download")
+        assert download.status_code == 404
+
+
+def test_run_pipeline_outputs_excludes_looped_tasks(tmp_path, monkeypatch):
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", _FakePopenMultiLine)
+
+    db_content = {
+        "test_module": [
+            {
+                "module": "test_module", "file": "a.R", "file_path": "C:\\scripts\\a.R", "filetype": ".r",
+                "name": "plain_task", "description": "",
+                "config": [
+                    {"name": "output_file", "role": "output_file", "relative": "0",
+                     "script_name": "output_file", "script_value": str(tmp_path / "plain_output.csv")},
+                ],
+            },
+            {
+                "module": "test_module", "file": "b.R", "file_path": "C:\\scripts\\b.R", "filetype": ".r",
+                "name": "looped_task", "description": "",
+                "config": [
+                    {"name": "output_file", "role": "output_file", "relative": "0",
+                     "script_name": "output_file", "script_value": str(tmp_path / "looped_output.csv")},
+                ],
+            },
+        ]
+    }
+    (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+    pipelines_content = {
+        "test_module": [
+            {
+                "name": "mixed_pipeline",
+                "description": "",
+                "tasks": [
+                    "plain_task",
+                    {
+                        "task": "looped_task",
+                        "overrides": {},
+                        "loop": {
+                            "parameters": {"ext_par": "some_list"},
+                            "combine": None,
+                            "mode": "sequential",
+                            "max_workers": None,
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
+    (tmp_path / "model_flow.lists.json").write_text(
+        json.dumps({"some_list": {"name": "some_list", "type": "string", "elements": ["A", "B"]}}),
+        encoding="utf-8",
+    )
+
+    app = create_app(make_config(tmp_path))
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post("/api/run_pipeline", json={"module": "test_module", "pipeline": "mixed_pipeline"})
+        run_id = resp.get_json()["run_id"]
+        asyncio.run(_collect_ws_events(f"{server.base_url}/ws/run/{run_id}?from=0"))
+
+        outputs = client.get(f"/api/run/{run_id}/outputs").get_json()
+        assert [group["task"] for group in outputs] == ["plain_task"]
 
 
 def test_websocket_reconnect_catches_up_missed_events_without_duplicates(tmp_path, monkeypatch):
