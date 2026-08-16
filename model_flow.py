@@ -72,15 +72,22 @@ def build(config: Config) -> None:
         with open(lists_output_file, 'w', encoding='utf-8') as f:
             json.dump({"lists": list(lists.values())}, f, indent=4, ensure_ascii=False)
 
+        graph = Parser.build_graph(modules, str(db_dir))
+        graph_output_file = db_dir / Parser.graph_filename
+
+        with open(graph_output_file, 'w', encoding='utf-8') as f:
+            json.dump(graph, f, indent=4, ensure_ascii=False)
+
         # Detailed success message
         module_count = len(modules)
         task_count = sum(len(tasks) for tasks in modules.values())
         pipeline_count = sum(len(p) for p in pipelines.values())
         list_count = len(lists)
+        link_count = len(graph["links"])
         logger.info(
             f"Build successful! Database saved to {output_file}\n"
             f"Summary: {module_count} modules, {task_count} tasks, "
-            f"{pipeline_count} pipelines, {list_count} lists"
+            f"{pipeline_count} pipelines, {list_count} lists, {link_count} file links"
         )
         
     except Exception as e:

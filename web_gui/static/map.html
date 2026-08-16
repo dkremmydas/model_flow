@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Flow - Dependency Map</title>
+<link rel="stylesheet" href="/bootstrap.min.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="d-flex flex-column vh-100">
+  <nav class="navbar navbar-dark bg-dark px-3 flex-shrink-0">
+    <span class="navbar-brand mb-0 h1">Dependency Map</span>
+  </nav>
+
+  <div class="flex-grow-1 d-flex overflow-hidden">
+    <div id="map-search-pane" class="border-end p-2 overflow-auto flex-shrink-0">
+      <div class="mb-3">
+        <label class="form-label small fw-semibold" for="map-search">Search</label>
+        <input id="map-search" type="text" class="form-control form-control-sm" placeholder="Find a module/task...">
+      </div>
+      <div class="mb-3">
+        <div class="form-label small fw-semibold">File types</div>
+        <div id="map-extension-filter"></div>
+      </div>
+      <div class="mb-3">
+        <div class="form-label small fw-semibold">Expanded modules</div>
+        <div id="map-expanded-list"></div>
+      </div>
+      <details>
+        <summary class="form-label small fw-semibold">Settings</summary>
+        <div class="map-setting">
+          <label class="form-label small d-flex justify-content-between mb-0" for="setting-link-distance">
+            <span>Link distance</span><span id="setting-link-distance-value"></span>
+          </label>
+          <input type="range" class="form-range" id="setting-link-distance" min="20" max="200" step="5">
+        </div>
+        <div class="map-setting">
+          <label class="form-label small d-flex justify-content-between mb-0" for="setting-repulsion">
+            <span>Repulsion</span><span id="setting-repulsion-value"></span>
+          </label>
+          <input type="range" class="form-range" id="setting-repulsion" min="20" max="400" step="10">
+        </div>
+        <div class="map-setting">
+          <label class="form-label small d-flex justify-content-between mb-0" for="setting-collision">
+            <span>Node spacing</span><span id="setting-collision-value"></span>
+          </label>
+          <input type="range" class="form-range" id="setting-collision" min="10" max="60" step="2">
+        </div>
+        <div class="map-setting">
+          <label class="form-label small d-flex justify-content-between mb-0" for="setting-center-pull">
+            <span>Center pull</span><span id="setting-center-pull-value"></span>
+          </label>
+          <input type="range" class="form-range" id="setting-center-pull" min="0" max="0.3" step="0.01">
+        </div>
+        <button id="setting-reset-btn" class="btn btn-outline-secondary btn-sm mt-1">Reset to defaults</button>
+      </details>
+    </div>
+
+    <div id="map-svg-pane" class="flex-grow-1 position-relative overflow-hidden">
+      <div id="map-empty-message" class="text-muted p-3 d-none">
+        No graph built yet -- run "Rebuild database" from the main page first.
+      </div>
+      <svg id="map-svg"></svg>
+    </div>
+
+    <div id="map-detail-pane" class="border-start p-3 overflow-auto flex-shrink-0">
+      <div id="map-detail-empty" class="text-muted">Click a node to see its details.</div>
+      <div id="map-detail-content" class="d-none">
+        <h5 id="map-detail-title"></h5>
+        <p id="map-detail-description" class="text-muted small"></p>
+        <div id="map-detail-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/d3.min.js"></script>
+  <script src="/map.js"></script>
+</body>
+</html>

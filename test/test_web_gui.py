@@ -121,6 +121,22 @@ def write_db_with_output_file_task(tmp_path):
     (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
 
 
+def write_file_task_script(folder, name, module, role, script_name, value, relative=None):
+    """A real, annotated .R script (unlike write_db_with_*, which fabricates
+    model_flow.db.json directly) -- needed for /api/rebuild tests, since
+    rebuild rescans Code_directory from scratch rather than reading the
+    pre-built db file."""
+    relative_attr = f' relative="{relative}"' if relative is not None else ""
+    content = (
+        f'#@MODELFLOW_task name="{name}" module="{module}"\n'
+        f'#@MODELFLOW_config name="{script_name}" role="{role}"{relative_attr}\n'
+        f'{script_name} = "{value}"\n'
+    )
+    path = folder / f"script_{name}.R"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Plain HTTP routes (Flask test_client, no real server/socket needed)
 # ---------------------------------------------------------------------------
@@ -246,6 +262,14 @@ def test_download_output_unknown_run_id_returns_404(tmp_path):
     client = create_app(make_config(tmp_path)).test_client()
 
     resp = client.get("/api/run/does-not-exist/outputs/test_module/1_test_task/output_file/download")
+    assert resp.status_code == 404
+
+
+def test_api_graph_returns_404_before_any_rebuild(tmp_path):
+    write_db_with_one_task(tmp_path)
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/graph")
     assert resp.status_code == 404
 
 
@@ -551,6 +575,33 @@ def test_run_pipeline_outputs_excludes_looped_tasks(tmp_path, monkeypatch):
 
         outputs = client.get(f"/api/run/{run_id}/outputs").get_json()
         assert [group["task"] for group in outputs] == ["plain_task"]
+
+
+def test_rebuild_writes_graph_json_and_api_graph_serves_it(tmp_path):
+    write_db_with_one_task(tmp_path)  # so create_app() doesn't fail at startup (Database requires an existing db file)
+
+    output_path = str(tmp_path / "shared_output.csv")
+    write_file_task_script(tmp_path / "producer", "make_data", "module_a", "output_file", "output_file",
+                            output_path, relative="0")
+    write_file_task_script(tmp_path / "consumer", "use_data", "module_b", "input_file", "input_file",
+                            output_path, relative="0")
+
+    app = create_app(make_config(tmp_path))
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post("/api/rebuild")
+        run_id = resp.get_json()["run_id"]
+        asyncio.run(_collect_ws_events(f"{server.base_url}/ws/run/{run_id}?from=0"))
+
+        assert (tmp_path / "model_flow.graph.json").exists()
+
+        graph = client.get("/api/graph").get_json()
+        assert graph["links"] == [{
+            "from_module": "module_a", "from_task": "make_data",
+            "to_module": "module_b", "to_task": "use_data",
+            "file": output_path, "extension": ".csv",
+        }]
 
 
 def test_websocket_reconnect_catches_up_missed_events_without_duplicates(tmp_path, monkeypatch):

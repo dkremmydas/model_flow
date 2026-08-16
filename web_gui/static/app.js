@@ -427,6 +427,10 @@ document.getElementById("rebuild-btn").addEventListener("click", () => {
     startRun(fetch("/api/rebuild", { method: "POST" }), "database rebuild");
 });
 
+document.getElementById("map-btn").addEventListener("click", () => {
+    window.open("/map.html", "_blank");
+});
+
 document.getElementById("clear-btn").addEventListener("click", () => {
     document.getElementById("output-log").textContent = "";
     clearRunOutputs();

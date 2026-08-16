@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 
 from classes.Parser import Parser
 
@@ -26,6 +27,16 @@ def write_pipelines_file(folder, module, pipelines, filename="model_flow.pipelin
 
 def write_lists_file(folder, lists, filename="model_flow.lists.json"):
     write(folder, filename, content=json.dumps({"lists": lists}))
+
+
+def write_file_task(folder, name, module, role, script_name, value, relative=None):
+    relative_attr = f' relative="{relative}"' if relative is not None else ""
+    content = (
+        f'#@MODELFLOW_task name="{name}" module="{module}"\n'
+        f'#@MODELFLOW_config name="{script_name}" role="{role}"{relative_attr}\n'
+        f'{script_name} = "{value}"\n'
+    )
+    write(folder, "script_" + name + ".R", content=content)
 
 
 def test_parse_pipelines_returns_empty_dict_when_no_pipelines_files(tmp_path):
@@ -431,3 +442,77 @@ def test_expand_loop_product_combines_all_pairs():
         {"region_from": "AT12", "region_to": "BE10"},
         {"region_from": "AT12", "region_to": "BE21"},
     ]
+
+
+def test_resolve_role_path_relative_zero_is_absolute_as_is():
+    assert Parser.resolve_role_path("C:/db", "C:/elsewhere/data.csv", "0") == Path("C:/elsewhere/data.csv")
+
+
+def test_resolve_role_path_default_resolves_against_database_directory():
+    assert Parser.resolve_role_path("C:/db", "outputs/data.csv", None) == Path("C:/db/outputs/data.csv")
+    assert Parser.resolve_role_path("C:/db", "outputs/data.csv", "1") == Path("C:/db/outputs/data.csv")
+
+
+def test_build_graph_links_matching_output_and_input_files(tmp_path):
+    output_path = str(tmp_path / "shared" / "data.csv")
+    write_file_task(tmp_path / "producer", "make_data", "module_a", "output_file", "output_file",
+                     output_path, relative="0")
+    write_file_task(tmp_path / "consumer", "use_data", "module_b", "input_file", "input_file",
+                     output_path, relative="0")
+
+    modules = Parser.parse_modules(str(tmp_path))
+    graph = Parser.build_graph(modules, str(tmp_path))
+
+    assert graph["links"] == [{
+        "from_module": "module_a", "from_task": "make_data",
+        "to_module": "module_b", "to_task": "use_data",
+        "file": output_path, "extension": ".csv",
+    }]
+
+
+def test_build_graph_excludes_self_loop(tmp_path):
+    path = str(tmp_path / "same.csv")
+    content = (
+        '#@MODELFLOW_task name="roundtrip" module="module_a"\n'
+        '#@MODELFLOW_config name="output_file" role="output_file" relative="0"\n'
+        f'output_file = "{path}"\n'
+        '#@MODELFLOW_config name="input_file" role="input_file" relative="0"\n'
+        f'input_file = "{path}"\n'
+    )
+    write(tmp_path, "script_roundtrip.R", content=content)
+
+    modules = Parser.parse_modules(str(tmp_path))
+    graph = Parser.build_graph(modules, str(tmp_path))
+
+    assert graph["links"] == []
+
+
+def test_build_graph_includes_orphan_task_with_no_file_roles(tmp_path):
+    write_task(tmp_path, name="1_task")
+
+    modules = Parser.parse_modules(str(tmp_path))
+    graph = Parser.build_graph(modules, str(tmp_path))
+
+    assert graph["modules"] == {"test_module": {"tasks": ["1_task"]}}
+    assert graph["tasks"] == {"test_module": [{"name": "1_task", "filetype": ".r"}]}
+    assert graph["links"] == []
+
+
+def test_build_graph_relative_default_resolves_against_database_directory(tmp_path):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    relative_value = "outputs/result.gdx"
+    absolute_value = str(db_dir / "outputs" / "result.gdx")
+
+    write_file_task(tmp_path / "producer", "make_result", "module_a", "output_file", "output_file",
+                     relative_value)
+    write_file_task(tmp_path / "consumer", "use_result", "module_b", "input_file", "input_file",
+                     absolute_value, relative="0")
+
+    modules = Parser.parse_modules(str(tmp_path))
+    graph = Parser.build_graph(modules, str(db_dir))
+
+    assert len(graph["links"]) == 1
+    assert graph["links"][0]["from_task"] == "make_result"
+    assert graph["links"][0]["to_task"] == "use_result"
+    assert graph["links"][0]["extension"] == ".gdx"

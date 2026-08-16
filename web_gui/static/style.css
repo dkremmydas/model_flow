@@ -109,3 +109,88 @@
 #output-downloads a:hover {
     text-decoration: underline;
 }
+
+/* Dependency map (map.html/map.js) */
+#map-search-pane {
+    width: 240px;
+}
+
+#map-detail-pane {
+    width: 320px;
+}
+
+#map-svg-pane {
+    background: var(--bs-body-bg);
+}
+
+#map-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.map-link {
+    stroke: var(--bs-secondary-color);
+    stroke-width: 1.5px;
+    fill: none;
+}
+
+.map-link.filtered-out,
+.map-link.not-in-chain {
+    opacity: 0.1;
+}
+
+.map-arrow {
+    fill: var(--bs-secondary-color);
+}
+
+/* fill is set per-node by map.js (moduleColorScale), not here -- a task node's
+   circle is colored the same as the module it belongs to. */
+.map-node circle {
+    cursor: pointer;
+    stroke: var(--bs-body-bg);
+    stroke-width: 1.5px;
+}
+
+.map-node text {
+    font-size: 11px;
+    pointer-events: none;
+    user-select: none;
+    fill: var(--bs-body-color);
+}
+
+.map-node.not-in-chain {
+    opacity: 0.15;
+}
+
+.map-node.selected circle,
+.map-node.search-match circle {
+    stroke: var(--bs-warning);
+    stroke-width: 3px;
+}
+
+.map-expanded-chip {
+    font-weight: 400;
+}
+
+.map-collapse-x {
+    cursor: pointer;
+    font-weight: 700;
+    margin-left: 0.15rem;
+}
+
+.map-collapse-x:hover {
+    color: var(--bs-danger);
+}
+
+#map-search-pane summary {
+    cursor: pointer;
+}
+
+.map-setting {
+    margin-top: 0.5rem;
+}
+
+.map-setting .form-range {
+    height: 1rem;
+}

@@ -133,16 +133,6 @@ def _launch(run_state: RunState, work) -> Optional[str]:
     return run_id
 
 
-def _resolve_output_path(config: Config, value: str, relative_flag) -> Path:
-    """Resolve a role="output_file" config entry's value to an actual filesystem
-    path: relative_flag == "0" means the value is already an absolute path, used
-    as-is; anything else (including unset, per docs/task-annotations.md's
-    documented default) resolves it relative to Database_directory."""
-    if relative_flag == "0":
-        return Path(value)
-    return Path(config.get("Database_directory")) / value
-
-
 def _describe_loop(loop: Dict) -> str:
     """One-line, read-only summary of a pipeline task's loop declaration, e.g.
     "Looped over nuts_code=nuts2 (parallel, up to 8 workers)". Mirrors
@@ -313,6 +303,10 @@ def create_app(config: Config) -> Flask:
             modules = Parser.parse_modules(code_directory, on_file)
             lists_data = Parser.parse_lists(code_directory, on_file)
             pipelines = Parser.parse_pipelines(code_directory, modules, lists_data, on_file)
+            graph = Parser.build_graph(modules, config.get("Database_directory"))
+            (Path(config.get("Database_directory")) / Parser.graph_filename).write_text(
+                json.dumps(graph, indent=2), encoding="utf-8"
+            )
 
             database.data = modules
             database.save()
@@ -335,7 +329,7 @@ def create_app(config: Config) -> Flask:
             record.append({
                 "type": "output",
                 "line": f"Database rebuilt: {module_count} modules, {task_count} tasks, "
-                        f"{pipeline_count} pipelines, {list_count} lists",
+                        f"{pipeline_count} pipelines, {list_count} lists, {len(graph['links'])} file links",
             })
             return 0
 
@@ -351,6 +345,13 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "no running task to kill"}), 409
         record.process.terminate()
         return jsonify({"ok": True})
+
+    @app.route("/api/graph")
+    def api_graph():
+        graph_path = Path(config.get("Database_directory")) / Parser.graph_filename
+        if not graph_path.exists():
+            return jsonify({"error": "no graph built yet -- run rebuild first"}), 404
+        return jsonify(json.loads(graph_path.read_text(encoding="utf-8")))
 
     @app.route("/api/run/<run_id>/outputs")
     def api_run_outputs(run_id):
@@ -371,7 +372,7 @@ def create_app(config: Config) -> Flask:
                 value = info["overrides"].get(script_name, param.get("script_value"))
                 if value is None:
                     continue
-                resolved = _resolve_output_path(config, value, param.get("relative"))
+                resolved = Parser.resolve_role_path(config.get("Database_directory"), value, param.get("relative"))
                 files.append({"script_name": script_name, "value": value, "exists": resolved.is_file()})
             if files:
                 result.append({"module": info["module"], "task": info["task"], "files": files})
@@ -398,7 +399,7 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "not an output_file parameter"}), 404
 
         value = info["overrides"].get(script_name, param.get("script_value"))
-        resolved = _resolve_output_path(config, value, param.get("relative"))
+        resolved = Parser.resolve_role_path(config.get("Database_directory"), value, param.get("relative"))
         if not resolved.is_file():
             return jsonify({"error": "file not found on disk"}), 404
         return send_file(resolved, as_attachment=True)

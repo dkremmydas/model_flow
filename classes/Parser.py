@@ -2,6 +2,7 @@ import os
 import json
 import itertools
 import numpy as np
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from classes.Task import Task
@@ -19,6 +20,7 @@ class Parser:
     ignore_dirs = {".git", ".vscode", ".svn", "__pycache__", "venv"}
     pipelines_filename = "model_flow.pipelines.json"
     lists_filename = "model_flow.lists.json"
+    graph_filename = "model_flow.graph.json"
 
     @staticmethod
     def parse_range_args(range_args: Optional[List[List[str]]]) -> Dict[str, List[float]]:
@@ -417,3 +419,83 @@ class Parser:
 
         logger.info(f"Found {len(lists)} lists across {directory}")
         return lists
+
+    @staticmethod
+    def resolve_role_path(database_directory: str, value: str, relative_flag) -> Path:
+        """
+        Resolve a role="input_file"/role="output_file" config entry's value to an
+        actual filesystem path: relative_flag == "0" means the value is already an
+        absolute path, used as-is; anything else (including unset, per
+        docs/task-annotations.md's documented default) resolves it relative to
+        Database_directory. Shared by build_graph (matching input_file/output_file
+        pairs across tasks) and web_gui/server.py (resolving an output_file to
+        serve for download) so the two features can't drift apart on this rule.
+        """
+        if relative_flag == "0":
+            return Path(value)
+        return Path(database_directory) / value
+
+    @staticmethod
+    def build_graph(modules: Dict[str, List[Dict]], database_directory: str) -> Dict:
+        """
+        Derive a dependency graph from role="input_file"/role="output_file" config
+        entries: task A links to task B if an output_file of A resolves to the same
+        path as an input_file of B. Returns a flat "links" list as the single source
+        of truth -- callers (the web GUI's map view) derive both a module-level graph
+        (group links where from_module != to_module) and a single module's task-level
+        graph (filter links where from_module == to_module == that module) from it,
+        rather than this method precomputing two separate shapes.
+
+        Every module/task is recorded in "modules"/"tasks" regardless of whether it
+        has any links, so a task with no input_file/output_file config (e.g. a plain
+        parameter-only script) still shows up as an isolated node rather than being
+        silently dropped.
+        """
+        tasks_by_module: Dict[str, List[Dict]] = {}
+        # resolved, normalized path -> {"producers": [...], "consumers": [...], "display": str}
+        files: Dict[str, Dict] = {}
+
+        for module_name, tasks in modules.items():
+            tasks_by_module[module_name] = [
+                {"name": t["name"], "filetype": t.get("filetype")} for t in tasks if t.get("name")
+            ]
+
+            for task in tasks:
+                task_name = task.get("name")
+                if not task_name:
+                    continue
+
+                for param in task.get("config", []):
+                    role = param.get("role")
+                    script_value = param.get("script_value")
+                    if role not in ("input_file", "output_file") or not script_value:
+                        continue
+
+                    resolved = Parser.resolve_role_path(database_directory, script_value, param.get("relative"))
+                    key = os.path.normcase(os.path.normpath(str(resolved)))
+                    entry = files.setdefault(key, {"producers": [], "consumers": [], "display": str(resolved)})
+                    bucket = entry["producers"] if role == "output_file" else entry["consumers"]
+                    bucket.append({"module": module_name, "task": task_name})
+
+        links = []
+        for entry in files.values():
+            extension = os.path.splitext(entry["display"])[1].lower()
+            for producer in entry["producers"]:
+                for consumer in entry["consumers"]:
+                    if producer["module"] == consumer["module"] and producer["task"] == consumer["task"]:
+                        continue  # a task's own output feeding its own input isn't a dependency
+                    links.append({
+                        "from_module": producer["module"],
+                        "from_task": producer["task"],
+                        "to_module": consumer["module"],
+                        "to_task": consumer["task"],
+                        "file": entry["display"],
+                        "extension": extension,
+                    })
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "modules": {name: {"tasks": [t["name"] for t in ts]} for name, ts in tasks_by_module.items()},
+            "tasks": tasks_by_module,
+            "links": links,
+        }
