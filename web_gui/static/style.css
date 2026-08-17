@@ -81,6 +81,11 @@
     margin-top: 1rem;
 }
 
+#detail-description,
+#map-detail-description {
+    white-space: pre-wrap;
+}
+
 /* Default height -- see the .resize-handle comment above. */
 #output-pane {
     height: 220px;
