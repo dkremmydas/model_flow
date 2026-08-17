@@ -81,9 +81,26 @@
     margin-top: 1rem;
 }
 
-#detail-description,
-#map-detail-description {
+.description-text {
     white-space: pre-wrap;
+}
+
+.description-text.collapsed {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.description-text.collapsible {
+    cursor: pointer;
+}
+
+.description-toggle {
+    display: inline-block;
+    font-size: 0.75rem;
+    text-decoration: none;
+    margin-bottom: 0.5rem;
 }
 
 /* Default height -- see the .resize-handle comment above. */

@@ -29,7 +29,8 @@
       <div id="detail-empty" class="text-muted">Select a task or pipeline from the tree.</div>
       <div id="detail-content" class="d-none">
         <h4 id="detail-title"></h4>
-        <p id="detail-description" class="text-muted"></p>
+        <p id="detail-description" class="text-muted small description-text"></p>
+        <a id="detail-description-toggle" href="#" class="description-toggle d-none"></a>
         <div id="detail-form"></div>
         <button id="run-btn" class="btn btn-primary mt-2">Run</button>
       </div>
@@ -55,6 +56,7 @@
     </div>
   </div>
 
+  <script src="/description.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -480,7 +480,9 @@ function selectNode(node) {
 }
 
 function showTaskDetail(node) {
-    document.getElementById("map-detail-description").textContent = "Loading...";
+    const descriptionEl = document.getElementById("map-detail-description");
+    const descriptionToggleEl = document.getElementById("map-detail-description-toggle");
+    renderDescription(descriptionEl, descriptionToggleEl, "Loading...");
     const body = document.getElementById("map-detail-body");
     body.innerHTML = "";
 
@@ -488,7 +490,7 @@ function showTaskDetail(node) {
         .then((r) => r.json())
         .then((data) => {
             if (selectedNodeId !== node.id) return; // user clicked elsewhere while this was loading
-            document.getElementById("map-detail-description").textContent = data.task.description || "";
+            renderDescription(descriptionEl, descriptionToggleEl, data.task.description);
             for (const param of data.task.config || []) {
                 const row = document.createElement("div");
                 row.className = "small mb-1";

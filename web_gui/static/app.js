@@ -279,7 +279,11 @@ function selectTask(module, taskName) {
 
             showDetail();
             document.getElementById("detail-title").textContent = `${module}/${taskName}`;
-            document.getElementById("detail-description").textContent = data.task.description || "";
+            renderDescription(
+                document.getElementById("detail-description"),
+                document.getElementById("detail-description-toggle"),
+                data.task.description
+            );
 
             const form = document.getElementById("detail-form");
             form.innerHTML = "";
@@ -306,7 +310,11 @@ function selectPipeline(module, pipelineName) {
 
             showDetail();
             document.getElementById("detail-title").textContent = `${module}/${pipelineName} (pipeline)`;
-            document.getElementById("detail-description").textContent = data.pipeline.description || "";
+            renderDescription(
+                document.getElementById("detail-description"),
+                document.getElementById("detail-description-toggle"),
+                data.pipeline.description
+            );
 
             const form = document.getElementById("detail-form");
             form.innerHTML = "";
