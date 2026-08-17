@@ -27,6 +27,11 @@ class Task:
     # across all filetypes.
     ATTRIBUTE_PATTERN = r'(\w+)="([^"]+)"'
 
+    # Leading comment marker stripped from each line inside a description_start/
+    # description_end block, R/Rmd only -- covers both a plain "#" and roxygen-
+    # style "#'" (with or without the single trailing space either leaves).
+    DESCRIPTION_PREFIX_PATTERN_R = r"^#'?\s?"
+
     def __init__(self, file_path):
         """
         Initialize the Task object with the provided file path.
@@ -259,7 +264,7 @@ class Task:
             else:
                 if isDescriptionLine == 1:
                     if line and any(char.isalpha() for char in line):
-                        self.description += f"\n{line}"
+                        self.description += f"\n{re.sub(self.DESCRIPTION_PREFIX_PATTERN_R, '', line)}"
                         
                                         
 
