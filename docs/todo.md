@@ -1,7 +1,7 @@
 In the webgui, can i also have a button to open the log of the flask server?
 
-Modules have a hierarchical directory-like structure. The module names potentially contain "/" that indicate their position in the hierarchy. For example, a module named "module/submodule" would be located in the "module" directory and contain a submodule named "submodule". What changes do I expect to make in the code to support this hierarchical structure? The way the database holds the information is ok. I would prefer not to change anyhting in the logic of the current code, just the view/display part.  That means that in the web_gui, apply this logic. Also update the README.md and also the CLAUDE.md to describe this hierarchical directory-like module structure and naming convention.
+
 
 In the role=parameter, add a type list_number and another one list)number. The idea is tha the R script expects a list of numbers or of strings. The list_number type should be a list of numbers, and the list_string type should be a list of strings. 
 
-When parsing the description of R or Rmd file, you correctly remove the # comment lines from the beggining. But if the comments are of the style #', they are not removed. Please remove them as well.
+When you initialize a modelflow project, ask also for a title. keep this somewhere (maybe model_flow.config?), so  you display it in the gui

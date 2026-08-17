@@ -24,9 +24,29 @@
     cursor: row-resize;
 }
 
+/* --depth is set inline per element by app.js's renderModuleNode/makeTreeItem,
+   one level per "/"-separated segment of a module's name (see CLAUDE.md's
+   Terminology section) -- depth 0 (every module before this feature existed)
+   computes to the exact padding below, so flat module names are unaffected. */
 #tree-container .tree-module {
     font-weight: 600;
     margin-top: 0.5rem;
+    padding-left: calc(0.5rem * var(--depth, 0));
+    cursor: pointer;
+    user-select: none;
+}
+
+#tree-container .tree-module:hover {
+    color: var(--bs-primary);
+}
+
+#tree-container .tree-toggle {
+    display: inline-block;
+    width: 1em;
+    text-align: center;
+    margin-right: 0.15rem;
+    font-size: 0.7rem;
+    color: var(--bs-secondary-color);
 }
 
 #tree-container .tree-group {
@@ -34,14 +54,14 @@
     font-size: 0.8rem;
     text-transform: uppercase;
     margin-top: 0.25rem;
-    margin-left: 0.5rem;
+    margin-left: calc(0.5rem + 0.5rem * var(--depth, 0));
 }
 
 #tree-container .tree-item {
     display: block;
     width: 100%;
     text-align: left;
-    padding: 0.15rem 0.5rem 0.15rem 1rem;
+    padding: 0.15rem 0.5rem 0.15rem calc(1rem + 0.5rem * var(--depth, 0));
     border: none;
     background: none;
     border-radius: 0.25rem;

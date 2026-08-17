@@ -9,6 +9,15 @@ const UI_STATE_KEY = "modelflow.ui";
 
 let treeData = [];
 let selection = null; // {kind: "task"|"pipeline", module, name}
+// Set of module-tree node paths (e.g. "v.main2020/d.policy") the user has
+// collapsed. `loadUiState` is defined further down, but function
+// declarations are hoisted, so calling it here at module-eval time is safe.
+// Undefined (rather than []) means "never saved" -- distinguished from an
+// empty array (user explicitly expanded everything) so loadTree() knows
+// whether to apply the "start fully collapsed" first-visit default below.
+const savedCollapsedTreePaths = loadUiState().collapsedTreePaths;
+let collapsedTreePaths = new Set(savedCollapsedTreePaths || []);
+let collapsedTreePathsInitialized = Array.isArray(savedCollapsedTreePaths);
 let taskDefaults = {}; // script_name -> default value, for the selected task
 let pipelineRows = []; // [{taskName, scriptName, inputId, defaultValue}], for the selected pipeline
 
@@ -136,6 +145,15 @@ function loadTree() {
         .then((r) => r.json())
         .then((data) => {
             treeData = data;
+            // First visit ever (nothing collapsed/expanded saved yet): start
+            // fully collapsed rather than dumping every module's full task
+            // list on screen at once. Later visits, and later tree reloads
+            // within this session (e.g. after "Rebuild database"), respect
+            // whatever the user last set instead of re-collapsing everything.
+            if (!collapsedTreePathsInitialized) {
+                collapsedTreePaths = allModuleTreePaths(treeData);
+                collapsedTreePathsInitialized = true;
+            }
             renderTree(document.getElementById("search-input").value);
             restoreSavedSelection();
         });
@@ -155,53 +173,176 @@ function restoreSavedSelection() {
     }
 }
 
+// A module name is a flat string that may use "/" as a separator to express
+// nested modules (e.g. "v.main2020/d.policy" -- see CLAUDE.md's Terminology
+// section). The database/API treat it as one opaque string throughout; this
+// splits it back apart purely for display, into a tree of {path, segment,
+// children, entry} nodes -- entry is the original {module, tasks, pipelines}
+// API object, attached at the node whose path exactly matches entry.module.
+function buildModuleTree(entries) {
+    const root = { path: "", children: {}, entry: null };
+    for (const entry of entries) {
+        let node = root;
+        let pathSoFar = "";
+        for (const segment of entry.module.split("/")) {
+            pathSoFar = pathSoFar ? `${pathSoFar}/${segment}` : segment;
+            if (!node.children[segment]) {
+                node.children[segment] = { path: pathSoFar, segment, children: {}, entry: null };
+            }
+            node = node.children[segment];
+        }
+        node.entry = entry;
+    }
+    return root;
+}
+
 function renderTree(query) {
     query = (query || "").trim().toLowerCase();
     const container = document.getElementById("tree-container");
     container.innerHTML = "";
 
-    for (const entry of treeData) {
-        const moduleMatches = entry.module.toLowerCase().includes(query);
-        const matchingTasks = moduleMatches ? entry.tasks : entry.tasks.filter((t) => t.toLowerCase().includes(query));
-        const matchingPipelines = moduleMatches
-            ? entry.pipelines
-            : entry.pipelines.filter((p) => p.toLowerCase().includes(query));
-
-        if (!moduleMatches && matchingTasks.length === 0 && matchingPipelines.length === 0) {
-            continue;
-        }
-
-        const moduleHeader = document.createElement("div");
-        moduleHeader.className = "tree-module";
-        moduleHeader.textContent = entry.module;
-        container.appendChild(moduleHeader);
-
-        if (matchingTasks.length) {
-            const tasksLabel = document.createElement("div");
-            tasksLabel.className = "tree-group";
-            tasksLabel.textContent = "Tasks";
-            container.appendChild(tasksLabel);
-            for (const taskName of matchingTasks) {
-                container.appendChild(makeTreeItem(entry.module, taskName, "task"));
-            }
-        }
-
-        if (matchingPipelines.length) {
-            const pipelinesLabel = document.createElement("div");
-            pipelinesLabel.className = "tree-group";
-            pipelinesLabel.textContent = "Pipelines";
-            container.appendChild(pipelinesLabel);
-            for (const pipelineName of matchingPipelines) {
-                container.appendChild(makeTreeItem(entry.module, pipelineName, "pipeline"));
-            }
-        }
+    const root = buildModuleTree(treeData);
+    for (const segment of Object.keys(root.children).sort()) {
+        renderModuleNode(container, root.children[segment], query, 0);
     }
 }
 
-function makeTreeItem(module, name, kind) {
+function toggleTreeNode(path) {
+    if (collapsedTreePaths.has(path)) {
+        collapsedTreePaths.delete(path);
+    } else {
+        collapsedTreePaths.add(path);
+    }
+    saveUiState({ collapsedTreePaths: [...collapsedTreePaths] });
+    renderTree(document.getElementById("search-input").value);
+}
+
+// Every group-node path that exists in the tree, i.e. every path a header
+// could be rendered for -- used by collapseAllTreeNodes() and the "start
+// fully collapsed on first visit" default in loadTree().
+function allModuleTreePaths(entries) {
+    const paths = new Set();
+    const walk = (node) => {
+        for (const child of Object.values(node.children)) {
+            paths.add(child.path);
+            walk(child);
+        }
+    };
+    walk(buildModuleTree(entries));
+    return paths;
+}
+
+function collapseAllTreeNodes() {
+    collapsedTreePaths = allModuleTreePaths(treeData);
+    saveUiState({ collapsedTreePaths: [...collapsedTreePaths] });
+    renderTree(document.getElementById("search-input").value);
+}
+
+function expandAllTreeNodes() {
+    collapsedTreePaths = new Set();
+    saveUiState({ collapsedTreePaths: [...collapsedTreePaths] });
+    renderTree(document.getElementById("search-input").value);
+}
+
+document.getElementById("collapse-all-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    collapseAllTreeNodes();
+});
+
+document.getElementById("expand-all-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    expandAllTreeNodes();
+});
+
+// Renders one module-path segment (and its Tasks/Pipelines, and its nested
+// submodules) into `container`, applying the same match semantics as the old
+// flat renderTree: a node's own path substring-matching the query reveals all
+// of its tasks/pipelines *and* its entire subtree unfiltered (query reset to
+// "" for the recursive call below); otherwise tasks/pipelines are filtered
+// individually and a branch with no match anywhere in it is dropped entirely.
+// Returns true if anything was actually appended, so an ancestor can tell
+// whether to keep its own header.
+//
+// Collapsing (via `collapsedTreePaths`) only applies while browsing the
+// unfiltered tree (query === "") -- an active search always shows matching
+// branches fully expanded, same as before this feature existed, regardless
+// of what's manually collapsed; toggling a header mid-search still updates
+// the persisted state, it just has no visible effect until the search is
+// cleared.
+function renderModuleNode(container, node, query, depth) {
+    const pathMatches = query === "" || node.path.toLowerCase().includes(query);
+    const entry = node.entry;
+    const matchingTasks = entry ? (pathMatches ? entry.tasks : entry.tasks.filter((t) => t.toLowerCase().includes(query))) : [];
+    const matchingPipelines = entry
+        ? (pathMatches ? entry.pipelines : entry.pipelines.filter((p) => p.toLowerCase().includes(query)))
+        : [];
+    const isCollapsed = query === "" && collapsedTreePaths.has(node.path);
+
+    const fragment = document.createDocumentFragment();
+
+    const header = document.createElement("div");
+    header.className = "tree-module";
+    header.style.setProperty("--depth", depth);
+
+    const toggle = document.createElement("span");
+    toggle.className = "tree-toggle";
+    toggle.textContent = isCollapsed ? "▸" : "▾";
+    header.appendChild(toggle);
+
+    const label = document.createElement("span");
+    label.textContent = node.segment;
+    header.appendChild(label);
+
+    header.addEventListener("click", () => toggleTreeNode(node.path));
+    fragment.appendChild(header);
+
+    if (isCollapsed) {
+        container.appendChild(fragment);
+        return true;
+    }
+
+    if (matchingTasks.length) {
+        const tasksLabel = document.createElement("div");
+        tasksLabel.className = "tree-group";
+        tasksLabel.style.setProperty("--depth", depth);
+        tasksLabel.textContent = "Tasks";
+        fragment.appendChild(tasksLabel);
+        for (const taskName of matchingTasks) {
+            fragment.appendChild(makeTreeItem(entry.module, taskName, "task", depth));
+        }
+    }
+
+    if (matchingPipelines.length) {
+        const pipelinesLabel = document.createElement("div");
+        pipelinesLabel.className = "tree-group";
+        pipelinesLabel.style.setProperty("--depth", depth);
+        pipelinesLabel.textContent = "Pipelines";
+        fragment.appendChild(pipelinesLabel);
+        for (const pipelineName of matchingPipelines) {
+            fragment.appendChild(makeTreeItem(entry.module, pipelineName, "pipeline", depth));
+        }
+    }
+
+    let anyChildRendered = false;
+    for (const segment of Object.keys(node.children).sort()) {
+        if (renderModuleNode(fragment, node.children[segment], pathMatches ? "" : query, depth + 1)) {
+            anyChildRendered = true;
+        }
+    }
+
+    const ownMatch = matchingTasks.length > 0 || matchingPipelines.length > 0;
+    if (!ownMatch && !anyChildRendered && !pathMatches) {
+        return false;
+    }
+    container.appendChild(fragment);
+    return true;
+}
+
+function makeTreeItem(module, name, kind, depth) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "tree-item";
+    btn.style.setProperty("--depth", depth);
     btn.textContent = name;
     btn.dataset.module = module;
     btn.dataset.name = name;
