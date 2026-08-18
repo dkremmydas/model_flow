@@ -589,7 +589,11 @@ class ModelFlowApp(App):
             self.startup_error = str(e)
 
         database_directory = self.config.get("Database_directory", "Not specified") if self.config else "Not specified"
-        self.title = f"Model Flow - Database Directory: {database_directory}"
+        project_title = self.config.get("Project_title") if self.config else None
+        if project_title:
+            self.title = f"Model Flow - {project_title} - Database Directory: {database_directory}"
+        else:
+            self.title = f"Model Flow - Database Directory: {database_directory}"
 
 
     def compose(self) -> ComposeResult:

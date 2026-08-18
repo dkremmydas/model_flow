@@ -138,6 +138,19 @@ function setupOutputResize() {
     });
 }
 
+// ---- Project title ---------------------------------------------------
+
+function loadProjectTitle() {
+    fetch("/api/config")
+        .then((r) => r.json())
+        .then((data) => {
+            if (data.project_title) {
+                document.getElementById("project-title").textContent = `— ${data.project_title}`;
+                document.title = `Model Flow - ${data.project_title}`;
+            }
+        });
+}
+
 // ---- Tree ----------------------------------------------------------------
 
 function loadTree() {
@@ -748,4 +761,5 @@ function handleRunEvent(data) {
 applySavedLayout();
 setupTreeResize();
 setupOutputResize();
+loadProjectTitle();
 loadTree();

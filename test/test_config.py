@@ -22,6 +22,7 @@ def test_create_from_user_input_retries_invalid_directory_and_executable_paths(t
         str(tmp_path / "nonexistent.exe"),        # invalid executable -> should warn and retry
         str(rscript),
         str(gams),
+        "My Project",                              # optional project title
     ])
 
     with patch("builtins.input", lambda prompt="": next(inputs)):
@@ -31,8 +32,35 @@ def test_create_from_user_input_retries_invalid_directory_and_executable_paths(t
     assert config.data["Database_directory"] == str(good_db_dir)
     assert config.data["Rscript_exe"] == str(rscript)
     assert config.data["GAMS_exe"] == str(gams)
+    assert config.data["Project_title"] == "My Project"
     assert tmp_dir.is_dir()  # auto-created for the DIRECTORY_CREATE key
 
     captured = capsys.readouterr()
     assert "is not a valid directory" in captured.out
     assert "does not point to an existing file" in captured.out
+
+
+def test_create_from_user_input_skips_blank_project_title(tmp_path):
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    tmp_dir = tmp_path / "tmp"
+    rscript = tmp_path / "Rscript.exe"
+    rscript.write_text("")
+    gams = tmp_path / "gams.exe"
+    gams.write_text("")
+
+    inputs = iter([
+        str(code_dir),
+        str(db_dir),
+        str(tmp_dir),
+        str(rscript),
+        str(gams),
+        "",  # blank project title -> should be skipped, not stored
+    ])
+
+    with patch("builtins.input", lambda prompt="": next(inputs)):
+        config = Config.create_from_user_input()
+
+    assert "Project_title" not in config.data

@@ -26,8 +26,14 @@ class Config:
     DIRECTORY_CREATE = ["Temporary_directory"]  # Keys that must be created if not exist
 
     EXECUTABLE_KEYS = ["Rscript_exe", "GAMS_exe"]  # Keys that must point to an existing executable file
-    
-    
+
+    # Optional, free-text keys prompted for by create_from_user_input() alongside REQUIRED_KEYS,
+    # but not enforced by validate_required_keys() -- a config file predating this key must still load.
+    OPTIONAL_KEYS = {
+        "Project_title": "Enter a title for this project (optional, press Enter to skip): ",
+    }
+
+
 
     def __init__(self, config_source: str = None):
         """
@@ -174,6 +180,11 @@ class Config:
 
                 data[key] = value
                 break
+
+        for key, prompt in Config.OPTIONAL_KEYS.items():
+            value = input(prompt).strip()
+            if value:
+                data[key] = value
 
         json_string = json.dumps(data)
         config = Config(config_source=json_string)

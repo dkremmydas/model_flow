@@ -83,11 +83,12 @@ Tasks are the executable units; pipelines order tasks within a module. Model-lev
   "Database_directory": "path/to/model/database",
   "Temporary_directory": "path/to/model/tmp",
   "Rscript_exe": "C:/Program Files/R/R-4.x.x/bin/Rscript.exe",
-  "GAMS_exe": "C:/GAMS/gams.exe"
+  "GAMS_exe": "C:/GAMS/gams.exe",
+  "Project_title": "My Model"
 }
 ```
 
-Save this as `model_flow.config.json`, or generate it interactively with `python model_flow.py init`.
+Save this as `model_flow.config.json`, or generate it interactively with `python model_flow.py init`. `Project_title` is optional (`init` prompts for it, blank to skip) and is shown in the GUI's title bar when set.
 
 ### 2. Annotate a task
 

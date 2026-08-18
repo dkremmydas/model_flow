@@ -157,6 +157,13 @@ def create_app(config: Config) -> Flask:
     def index():
         return send_from_directory(app.static_folder, "index.html")
 
+    @app.route("/api/config")
+    def api_config():
+        return jsonify({
+            "project_title": config.get("Project_title"),
+            "database_directory": config.get("Database_directory"),
+        })
+
     @app.route("/api/tree")
     def api_tree():
         return jsonify([
