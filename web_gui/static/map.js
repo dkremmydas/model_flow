@@ -14,6 +14,28 @@ let selectedExtensions = new Set();
 let simulation = null;
 let moduleColorScale = null;
 
+// Modules unchecked in the "Modules" sidebar list -- excluded entirely from
+// computeGraph()'s nodes/edges (not just dimmed like the extension filter),
+// since a hidden node's id would otherwise still be referenced by d3.forceLink.
+const HIDDEN_MODULES_STORAGE_KEY = "modelflow.map.hiddenModules";
+let hiddenModules = loadHiddenModules();
+
+function loadHiddenModules() {
+    try {
+        return new Set(JSON.parse(localStorage.getItem(HIDDEN_MODULES_STORAGE_KEY)) || []);
+    } catch (e) {
+        return new Set();
+    }
+}
+
+function saveHiddenModules() {
+    try {
+        localStorage.setItem(HIDDEN_MODULES_STORAGE_KEY, JSON.stringify([...hiddenModules]));
+    } catch (e) {
+        // localStorage unavailable -- persistence is a nice-to-have, not a requirement.
+    }
+}
+
 // Validated categorical palette (dataviz skill, references/palette.md), fixed
 // order, never cycled *within* a single 8-module view -- but a node-link graph
 // is an all-pairs-visible layout (any two nodes can end up adjacent), which the
@@ -135,11 +157,54 @@ fetch("/api/graph")
         // Domain is every module, sorted, fixed once at load -- so a task node
         // always agrees with the color its module was shown with while collapsed.
         moduleColorScale = d3.scaleOrdinal().domain(Object.keys(graphData.modules).sort()).range(MODULE_COLORS);
+        // Unlike the extension filter (rebuilt every renderGraph() call since
+        // extensions vary with expand/collapse state), the module list is
+        // static per graph load, so this only needs to run once here.
+        renderModuleFilter();
         render();
     })
     .catch(() => {
         document.getElementById("map-empty-message").classList.remove("d-none");
     });
+
+// ---- Module filter (excludes hidden modules' nodes/edges entirely) ---------
+
+function renderModuleFilter() {
+    const container = document.getElementById("map-module-filter");
+    container.innerHTML = "";
+    for (const moduleName of Object.keys(graphData.modules).sort()) {
+        const id = `mod-${moduleName.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const wrapper = document.createElement("div");
+        wrapper.className = "form-check";
+        wrapper.innerHTML = `
+            <input class="form-check-input" type="checkbox" id="${id}" ${hiddenModules.has(moduleName) ? "" : "checked"}>
+            <label class="form-check-label small" for="${id}">${moduleName}</label>
+        `;
+        wrapper.querySelector("input").addEventListener("change", (e) => {
+            if (e.target.checked) hiddenModules.delete(moduleName);
+            else hiddenModules.add(moduleName);
+            saveHiddenModules();
+            render();
+        });
+        container.appendChild(wrapper);
+    }
+}
+
+document.getElementById("map-modules-all-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    hiddenModules.clear();
+    saveHiddenModules();
+    renderModuleFilter();
+    render();
+});
+
+document.getElementById("map-modules-none-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    hiddenModules = new Set(Object.keys(graphData.modules));
+    saveHiddenModules();
+    renderModuleFilter();
+    render();
+});
 
 // ---- Graph derivation -------------------------------------------------------
 // graphData.links is the single source of truth. Every render, nodes/edges are
@@ -180,6 +245,7 @@ function computeGraph() {
 
     const nodes = [];
     for (const moduleName of Object.keys(graphData.modules)) {
+        if (hiddenModules.has(moduleName)) continue;
         if (expandedModules.has(moduleName)) {
             for (const task of graphData.tasks[moduleName] || []) {
                 nodes.push({ id: taskNodeId(moduleName, task.name), label: task.name, kind: "task", module: moduleName });
@@ -196,6 +262,7 @@ function computeGraph() {
     const endpointId = (moduleName, taskName) =>
         expandedModules.has(moduleName) ? taskNodeId(moduleName, taskName) : moduleName;
     const rawLinks = graphData.links
+        .filter((l) => !hiddenModules.has(l.from_module) && !hiddenModules.has(l.to_module))
         .map((l) => ({
             sourceId: endpointId(l.from_module, l.from_task),
             targetId: endpointId(l.to_module, l.to_task),
