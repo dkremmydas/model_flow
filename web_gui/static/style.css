@@ -175,6 +175,20 @@
     stroke: var(--bs-secondary-color);
     stroke-width: 1.5px;
     fill: none;
+    pointer-events: none;
+}
+
+.map-link-hit {
+    stroke: transparent;
+    stroke-width: 14px;
+    fill: none;
+    cursor: pointer;
+}
+
+.map-link-group:hover .map-link,
+.map-link-group.selected .map-link {
+    stroke: var(--bs-warning);
+    stroke-width: 3px;
 }
 
 .map-link.filtered-out,

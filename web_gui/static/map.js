@@ -13,6 +13,7 @@
 let graphData = null;
 let expandedModules = new Set();
 let selectedNodeId = null;
+let selectedEdgeKey = null;
 let selectedExtensions = new Set();
 let currentEdges = [];
 let lastLayoutSize = null;
@@ -126,8 +127,16 @@ svg.append("defs").append("marker")
     .attr("viewBox", "0 -5 10 10")
     .attr("refX", 22)
     .attr("refY", 0)
-    .attr("markerWidth", 7)
-    .attr("markerHeight", 7)
+    // userSpaceOnUse (rather than the default "strokeWidth") keeps the arrow's
+    // size and refX pullback distance fixed regardless of the referencing
+    // path's stroke-width -- otherwise the hover highlight's thicker stroke
+    // (.map-link-group:hover .map-link) doubles the marker's effective scale
+    // and visibly yanks the arrowhead to a different position. markerWidth/
+    // markerHeight are set to 7 * 1.5 (the resting stroke-width) so the arrow
+    // still looks the same size as before at rest, just no longer reactive.
+    .attr("markerUnits", "userSpaceOnUse")
+    .attr("markerWidth", 10.5)
+    .attr("markerHeight", 10.5)
     .attr("orient", "auto")
     .append("path")
     .attr("d", "M0,-5L10,0L0,5")
@@ -245,6 +254,15 @@ function groupLinks(rawLinks, sourceKey, targetKey) {
 
 function taskNodeId(moduleName, taskName) {
     return `${moduleName}::${taskName}`;
+}
+
+// Identifies an edge across re-renders (new edge objects every render) the
+// same way node ids do -- source/target may be a plain id (pre-layout) or a
+// node object (post-layout, once renderGraph mutates them in place).
+function edgeKey(e) {
+    const sourceId = typeof e.source === "object" ? e.source.id : e.source;
+    const targetId = typeof e.target === "object" ? e.target.id : e.target;
+    return `${sourceId}=>${targetId}`;
 }
 
 function computeGraph() {
@@ -399,6 +417,10 @@ function renderGraph(nodes, edges) {
         selectedNodeId = null;
         showEmptyDetail();
     }
+    if (selectedEdgeKey && !edges.some((e) => edgeKey(e) === selectedEdgeKey)) {
+        selectedEdgeKey = null;
+        showEmptyDetail();
+    }
 
     const extensions = [...new Set(edges.flatMap((e) => e.contributions.map((c) => c.extension || "(none)")))].sort();
     selectedExtensions = new Set(extensions);
@@ -418,17 +440,32 @@ function renderGraph(nodes, edges) {
     currentEdges = edges;
     lastLayoutSize = { width: g.graph().width, height: g.graph().height };
 
-    const linkSel = linkLayer.selectAll("path")
+    // Each edge is a <g> with two overlapping paths: a wide invisible one
+    // that alone handles pointer events/tooltip (so hovering doesn't require
+    // pixel-precise aim on the thin visible line), and the thin visible one
+    // (pointer-events disabled) purely for display + the arrowhead marker.
+    const linkGroup = linkLayer.selectAll("g.map-link-group")
         .data(edges)
-        .join("path")
-        .attr("class", "map-link")
-        .attr("marker-end", "url(#arrowhead)")
-        .attr("d", redrawEdgePath);
+        .join((enter) => {
+            const g = enter.append("g").attr("class", "map-link-group");
+            g.append("path").attr("class", "map-link-hit");
+            g.append("path").attr("class", "map-link").attr("marker-end", "url(#arrowhead)");
+            return g;
+        });
 
-    linkSel.each(function (d) {
+    linkGroup.selectAll("path").attr("d", redrawEdgePath);
+
+    linkGroup.select(".map-link-hit").each(function (d) {
+        // Multiple contributions can share the same file (e.g. several task
+        // pairs linked via the same input/output) -- de-dupe before listing.
         d3.select(this).append("title").text(
-            d.contributions.map((c) => c.file).join("\n")
+            [...new Set(d.contributions.map((c) => c.file))].join("\n")
         );
+    });
+
+    linkGroup.on("click", (event, d) => {
+        event.stopPropagation();
+        selectEdge(d);
     });
 
     const nodeGroup = nodeLayer.selectAll("g.map-node")
@@ -471,6 +508,11 @@ function renderGraph(nodes, edges) {
 
     applyExtensionFilter();
     applyChainHighlight();
+    applyEdgeSelection();
+}
+
+function applyEdgeSelection() {
+    linkLayer.selectAll("g.map-link-group").classed("selected", (d) => edgeKey(d) === selectedEdgeKey);
 }
 
 // ---- Extension filter (dims edges/nodes, doesn't remove them) -------------
@@ -584,7 +626,11 @@ function selectNode(node) {
     // Only task nodes reach here -- clicking a module node expands it in place
     // instead of selecting/showing a detail panel for it.
     selectedNodeId = node ? node.id : null;
+    // A node and an edge selection are mutually exclusive -- selecting one
+    // clears the other, same as clicking blank canvas clears both.
+    selectedEdgeKey = null;
     applyChainHighlight();
+    applyEdgeSelection();
 
     if (!node) {
         showEmptyDetail();
@@ -595,6 +641,43 @@ function selectNode(node) {
     document.getElementById("map-detail-content").classList.remove("d-none");
     document.getElementById("map-detail-title").textContent = node.label;
     showTaskDetail(node);
+}
+
+function selectEdge(edge) {
+    selectedEdgeKey = edgeKey(edge);
+    selectedNodeId = null;
+    applyChainHighlight();
+    applyEdgeSelection();
+
+    document.getElementById("map-detail-empty").classList.add("d-none");
+    document.getElementById("map-detail-content").classList.remove("d-none");
+    document.getElementById("map-detail-title").textContent = `${edge.source.label} → ${edge.target.label}`;
+    showEdgeDetail(edge);
+}
+
+function showEdgeDetail(edge) {
+    const descriptionEl = document.getElementById("map-detail-description");
+    const descriptionToggleEl = document.getElementById("map-detail-description-toggle");
+    renderDescription(descriptionEl, descriptionToggleEl, "");
+
+    const body = document.getElementById("map-detail-body");
+    body.innerHTML = "";
+    const files = [...new Set(edge.contributions.map((c) => c.file))];
+
+    const heading = document.createElement("div");
+    heading.className = "small fw-semibold mb-1";
+    heading.textContent = files.length === 1 ? "File" : "Files";
+    body.appendChild(heading);
+
+    const list = document.createElement("ul");
+    list.className = "small ps-3 mb-0";
+    for (const file of files) {
+        const li = document.createElement("li");
+        li.className = "text-break";
+        li.textContent = file;
+        list.appendChild(li);
+    }
+    body.appendChild(list);
 }
 
 function showTaskDetail(node) {
