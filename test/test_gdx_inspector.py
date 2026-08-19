@@ -43,14 +43,25 @@ def test_inspect_groups_symbols_by_type_with_dims_domains_and_counts(tmp_path):
 
     result = inspector.inspect(gdx_path)
 
-    assert result.startswith(f"GDX file: {gdx_path.name}\n4 symbols")
-    assert "Sets\n  i (1 dim, 2 elements)  domains: *  a test set" in result
-    assert "Parameters\n  p (1 dim, 2 elements)  domains: i  a test parameter" in result
-    assert "Variables\n  v (1 dim, 0 elements)  domains: i  a test variable" in result
-    assert "Equations\n  eq (0 dim, 1 elements)  domains: -  a test equation" in result
-
+    assert result["format"] == "gdx-symbols"
+    assert result["file_name"] == gdx_path.name
+    assert result["symbol_count"] == 4
     # Section order: Sets, Parameters, Variables, Equations.
-    assert result.index("Sets") < result.index("Parameters") < result.index("Variables") < result.index("Equations")
+    assert [s["title"] for s in result["sections"]] == ["Sets", "Parameters", "Variables", "Equations"]
+    assert result["sections"] == [
+        {"title": "Sets", "symbols": [
+            {"name": "i", "dimension": 1, "elements": 2, "domains": ["*"], "description": "a test set"},
+        ]},
+        {"title": "Parameters", "symbols": [
+            {"name": "p", "dimension": 1, "elements": 2, "domains": ["i"], "description": "a test parameter"},
+        ]},
+        {"title": "Variables", "symbols": [
+            {"name": "v", "dimension": 1, "elements": 0, "domains": ["i"], "description": "a test variable"},
+        ]},
+        {"title": "Equations", "symbols": [
+            {"name": "eq", "dimension": 0, "elements": 1, "domains": [], "description": "a test equation"},
+        ]},
+    ]
 
 
 def test_inspect_omits_description_when_absent(tmp_path):
@@ -61,9 +72,11 @@ def test_inspect_omits_description_when_absent(tmp_path):
 
     result = GdxInspector(make_config(tmp_path)).inspect(path)
 
-    assert "i (1 dim, 2 elements)  domains: *" in result
-    # No trailing description text/double-space after the domains segment.
-    assert result.rstrip("\n").endswith("domains: *")
+    assert result["sections"] == [
+        {"title": "Sets", "symbols": [
+            {"name": "i", "dimension": 1, "elements": 2, "domains": ["*"], "description": ""},
+        ]},
+    ]
 
 
 def test_inspect_missing_file_raises_file_not_found(tmp_path):
@@ -85,4 +98,9 @@ def test_inspect_invalid_gdx_file_reports_zero_symbols(tmp_path):
 
     result = inspector.inspect(bad_path)
 
-    assert result == f"GDX file: {bad_path.name}\n0 symbols"
+    assert result == {
+        "format": "gdx-symbols",
+        "file_name": bad_path.name,
+        "symbol_count": 0,
+        "sections": [],
+    }

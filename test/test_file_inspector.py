@@ -45,7 +45,7 @@ def test_inspect_path_returns_friendly_message_for_unsupported_type(tmp_path):
 
     result = FileInspector.inspect_path("data.csv", config)
 
-    assert result == "No inspector available for '.csv' files yet."
+    assert result == {"format": "unsupported", "message": "No inspector available for '.csv' files yet."}
 
 
 def test_inspect_path_reports_missing_extension(tmp_path):
@@ -53,7 +53,7 @@ def test_inspect_path_reports_missing_extension(tmp_path):
 
     result = FileInspector.inspect_path("Makefile", config)
 
-    assert result == "No inspector available for '(no extension)' files yet."
+    assert result == {"format": "unsupported", "message": "No inspector available for '(no extension)' files yet."}
 
 
 def test_base_inspect_raises_not_implemented(tmp_path):

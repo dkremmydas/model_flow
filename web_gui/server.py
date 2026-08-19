@@ -28,6 +28,7 @@ from flask_sock import Sock
 from classes.Config import Config
 from classes.Database import Database
 from classes.ExecutionEngine import ExecutionEngine, ExecutionResult
+from classes.FileInspector import FileInspector
 from classes.Lists import Lists
 from classes.Parser import Parser
 
@@ -353,12 +354,55 @@ def create_app(config: Config) -> Flask:
         record.process.terminate()
         return jsonify({"ok": True})
 
-    @app.route("/api/graph")
-    def api_graph():
+    def _load_graph():
+        """Read graph.json fresh (never cached -- mirrors api_graph's own
+        no-caching contract), or None if it hasn't been built yet."""
         graph_path = Path(config.get("Database_directory")) / Parser.graph_filename
         if not graph_path.exists():
+            return None
+        return json.loads(graph_path.read_text(encoding="utf-8"))
+
+    @app.route("/api/graph")
+    def api_graph():
+        graph = _load_graph()
+        if graph is None:
             return jsonify({"error": "no graph built yet -- run rebuild first"}), 404
-        return jsonify(json.loads(graph_path.read_text(encoding="utf-8")))
+        # exists is computed live on every request, not baked in at build time
+        # -- a file's existence changes as tasks run, independent of when the
+        # graph itself was last rebuilt (mirrors /api/run/<id>/outputs' own
+        # {"exists": resolved.is_file()} pattern).
+        for link in graph.get("links", []):
+            link["exists"] = Path(link["file"]).is_file()
+        return jsonify(graph)
+
+    @app.route("/api/inspect")
+    def api_inspect():
+        file_path = request.args.get("file")
+        if not file_path:
+            return jsonify({"error": "'file' query parameter is required"}), 400
+
+        # This is the first route that reads arbitrary file *contents* off
+        # disk (every other route only ever send_file's a path resolved from
+        # a known task's own config) -- restrict it to files the current
+        # graph actually knows about rather than letting it become a general
+        # arbitrary-file-read endpoint.
+        graph = _load_graph() or {}
+        known_files = {link["file"] for link in graph.get("links", [])}
+        if file_path not in known_files:
+            return jsonify({"error": "file is not part of the dependency graph"}), 403
+
+        resolved = Path(file_path)
+        if not resolved.is_file():
+            # Race-condition backstop -- the frontend already knows a file's
+            # existence from /api/graph and won't normally offer to inspect
+            # one it knows doesn't exist yet.
+            return jsonify({"exists": False})
+
+        try:
+            data = FileInspector.inspect_path(resolved, config)
+        except Exception as e:
+            return jsonify({"exists": True, "error": str(e)}), 500
+        return jsonify({"exists": True, "data": data})
 
     @app.route("/api/run/<run_id>/outputs")
     def api_run_outputs(run_id):

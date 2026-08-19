@@ -117,6 +117,73 @@ document.getElementById("setting-reset-btn").addEventListener("click", () => {
 
 syncLayoutInputs();
 
+// ---- Resizable side panels --------------------------------------------------
+// Persisted the same way the other map UI state is (localStorage,
+// best-effort). map.js is the source of truth for these widths once it runs;
+// the matching CSS rules are only a pre-JS fallback (see style.css).
+
+const PANE_WIDTHS_STORAGE_KEY = "modelflow.map.paneWidths";
+const PANE_WIDTH_DEFAULTS = { search: 240, detail: 320 };
+// [min, max] px, generous enough to be useful without letting a pane swallow
+// the whole window or shrink to something unusably thin.
+const PANE_WIDTH_LIMITS = { search: [160, 600], detail: [220, 700] };
+
+function loadPaneWidths() {
+    try {
+        return { ...PANE_WIDTH_DEFAULTS, ...JSON.parse(localStorage.getItem(PANE_WIDTHS_STORAGE_KEY)) };
+    } catch (e) {
+        return { ...PANE_WIDTH_DEFAULTS };
+    }
+}
+
+function savePaneWidths() {
+    try {
+        localStorage.setItem(PANE_WIDTHS_STORAGE_KEY, JSON.stringify(paneWidths));
+    } catch (e) {
+        // localStorage unavailable -- persistence is a nice-to-have, not a requirement.
+    }
+}
+
+let paneWidths = loadPaneWidths();
+document.getElementById("map-search-pane").style.width = `${paneWidths.search}px`;
+document.getElementById("map-detail-pane").style.width = `${paneWidths.detail}px`;
+
+// direction: 1 if dragging right should grow the pane (it's to the left of
+// its handle, e.g. the search pane), -1 if dragging right should shrink it
+// (it's to the right of its handle, e.g. the detail pane).
+function setupResizeHandle(handleId, paneId, key, direction) {
+    const handle = document.getElementById(handleId);
+    const pane = document.getElementById(paneId);
+    const [min, max] = PANE_WIDTH_LIMITS[key];
+
+    handle.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = pane.getBoundingClientRect().width;
+        handle.classList.add("resizing");
+        document.body.classList.add("map-resizing");
+
+        function onMove(moveEvent) {
+            const delta = (moveEvent.clientX - startX) * direction;
+            const width = Math.min(max, Math.max(min, startWidth + delta));
+            pane.style.width = `${width}px`;
+        }
+        function onUp() {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            handle.classList.remove("resizing");
+            document.body.classList.remove("map-resizing");
+            paneWidths[key] = pane.getBoundingClientRect().width;
+            savePaneWidths();
+        }
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    });
+}
+
+setupResizeHandle("map-search-resize-handle", "map-search-pane", "search", 1);
+setupResizeHandle("map-detail-resize-handle", "map-detail-pane", "detail", -1);
+
 const svg = d3.select("#map-svg");
 const zoomLayer = svg.append("g").attr("class", "zoom-layer");
 const linkLayer = zoomLayer.append("g").attr("class", "link-layer");
@@ -247,6 +314,7 @@ function groupLinks(rawLinks, sourceKey, targetKey) {
             extension: link.extension,
             from_task: link.from_task,
             to_task: link.to_task,
+            exists: link.exists,
         });
     }
     return [...groups.values()];
@@ -293,6 +361,7 @@ function computeGraph() {
             extension: l.extension,
             from_task: l.from_task,
             to_task: l.to_task,
+            exists: l.exists,
         }))
         .filter((l) => l.sourceId !== l.targetId);
     const edges = groupLinks(rawLinks, "sourceId", "targetId");
@@ -454,6 +523,11 @@ function renderGraph(nodes, edges) {
         });
 
     linkGroup.selectAll("path").attr("d", redrawEdgePath);
+
+    // Dashed when *any* contributing file doesn't exist yet -- "this
+    // dependency isn't fully realized yet" is a more useful signal than
+    // requiring every contribution to be missing before flagging it.
+    linkGroup.classed("missing", (d) => d.contributions.some((c) => !c.exists));
 
     linkGroup.select(".map-link-hit").each(function (d) {
         // Multiple contributions can share the same file (e.g. several task
@@ -662,22 +736,135 @@ function showEdgeDetail(edge) {
 
     const body = document.getElementById("map-detail-body");
     body.innerHTML = "";
-    const files = [...new Set(edge.contributions.map((c) => c.file))];
+    // A file always carries the same exists value across every contribution
+    // it appears in, so a Map dedupes the same way the old Set did while also
+    // keeping that value.
+    const files = new Map(edge.contributions.map((c) => [c.file, c.exists]));
 
     const heading = document.createElement("div");
     heading.className = "small fw-semibold mb-1";
-    heading.textContent = files.length === 1 ? "File" : "Files";
+    heading.textContent = files.size === 1 ? "File" : "Files";
     body.appendChild(heading);
 
     const list = document.createElement("ul");
     list.className = "small ps-3 mb-0";
-    for (const file of files) {
-        const li = document.createElement("li");
-        li.className = "text-break";
-        li.textContent = file;
-        list.appendChild(li);
+    for (const [file, exists] of files) {
+        list.appendChild(exists ? buildInspectableFileItem(file) : buildMissingFileItem(file));
     }
     body.appendChild(list);
+}
+
+function buildMissingFileItem(file) {
+    const li = document.createElement("li");
+    li.className = "text-break text-muted";
+    li.textContent = file + " ";
+    const note = document.createElement("span");
+    note.className = "fst-italic";
+    note.textContent = "(not created yet)";
+    li.appendChild(note);
+    return li;
+}
+
+function buildInspectableFileItem(file) {
+    const li = document.createElement("li");
+    li.className = "text-break mb-1";
+
+    const link = document.createElement("a");
+    link.href = "#";
+    link.className = "map-file-inspect-link";
+    link.textContent = file;
+    li.appendChild(link);
+
+    const output = document.createElement("div");
+    output.className = "map-file-inspect-output small d-none";
+    li.appendChild(output);
+
+    link.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const nowHidden = output.classList.toggle("d-none");
+        if (nowHidden || output.dataset.loaded) return;
+        output.textContent = "Loading...";
+        fetch(`/api/inspect?file=${encodeURIComponent(file)}`)
+            .then((r) => r.json())
+            .then((response) => {
+                if (response.error) {
+                    output.textContent = response.error;
+                } else {
+                    renderInspectResult(output, response.data);
+                }
+                output.dataset.loaded = "1";
+            })
+            .catch(() => {
+                output.textContent = "Failed to inspect file.";
+            });
+    });
+
+    return li;
+}
+
+// ---- Rendering inspect results (per "format", see classes/FileInspector.py) --
+
+function renderInspectResult(container, data) {
+    container.innerHTML = "";
+    if (data && data.format === "gdx-symbols") {
+        renderGdxSymbols(container, data);
+    } else if (data && data.message) {
+        container.textContent = data.message;
+    } else {
+        // Unknown/future format -- show the raw data rather than nothing, so
+        // a not-yet-specially-rendered inspector type is still usable.
+        const pre = document.createElement("pre");
+        pre.className = "mb-0";
+        pre.textContent = JSON.stringify(data, null, 2);
+        container.appendChild(pre);
+    }
+}
+
+function renderGdxSymbols(container, data) {
+    const summary = document.createElement("div");
+    summary.className = "text-muted mb-2";
+    summary.textContent = `${data.symbol_count} symbols`;
+    container.appendChild(summary);
+
+    for (const section of data.sections) {
+        const heading = document.createElement("div");
+        heading.className = "fw-semibold mt-2";
+        heading.textContent = section.title;
+        container.appendChild(heading);
+
+        for (const symbol of section.symbols) {
+            container.appendChild(buildGdxSymbolRow(symbol));
+        }
+    }
+}
+
+function buildGdxSymbolRow(symbol) {
+    const row = document.createElement("div");
+    row.className = "map-inspect-symbol mb-1";
+
+    const name = document.createElement("strong");
+    name.textContent = symbol.name;
+    row.appendChild(name);
+
+    row.appendChild(document.createTextNode(` (${symbol.dimension} dim, ${symbol.elements} elements)`));
+
+    if (symbol.domains.length) {
+        row.appendChild(document.createTextNode(" "));
+        const domains = document.createElement("span");
+        domains.className = "map-inspect-domains";
+        domains.textContent = `domains: ${symbol.domains.join(", ")}`;
+        row.appendChild(domains);
+    }
+
+    if (symbol.description) {
+        const desc = document.createElement("div");
+        desc.className = "map-inspect-description";
+        desc.textContent = symbol.description;
+        row.appendChild(desc);
+    }
+
+    return row;
 }
 
 function showTaskDetail(node) {

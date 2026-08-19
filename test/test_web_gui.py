@@ -19,6 +19,7 @@ from werkzeug.serving import make_server
 
 from classes import ExecutionEngine as execution_engine_module
 from classes.Config import Config
+from classes.Parser import Parser
 from web_gui.server import RunRecord, RunState, create_app
 
 MAX_FINISHED_RUNS = 5
@@ -119,6 +120,16 @@ def write_db_with_output_file_task(tmp_path):
         ]
     }
     (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+
+
+def write_graph(tmp_path, links):
+    graph_content = {
+        "generated_at": "2024-01-01T00:00:00+00:00",
+        "modules": {},
+        "tasks": {},
+        "links": links,
+    }
+    (tmp_path / Parser.graph_filename).write_text(json.dumps(graph_content), encoding="utf-8")
 
 
 def write_file_task_script(folder, name, module, role, script_name, value, relative=None):
@@ -271,6 +282,105 @@ def test_api_graph_returns_404_before_any_rebuild(tmp_path):
 
     resp = client.get("/api/graph")
     assert resp.status_code == 404
+
+
+def test_api_graph_reports_exists_per_link(tmp_path):
+    write_db_with_one_task(tmp_path)
+    existing = tmp_path / "present.csv"
+    existing.write_text("x", encoding="utf-8")
+    missing = str(tmp_path / "absent.csv")
+    write_graph(tmp_path, [
+        {"from_module": "a", "from_task": "t1", "to_module": "b", "to_task": "t2",
+         "file": str(existing), "extension": ".csv"},
+        {"from_module": "b", "from_task": "t2", "to_module": "c", "to_task": "t3",
+         "file": missing, "extension": ".csv"},
+    ])
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/graph")
+    assert resp.status_code == 200
+    links = resp.get_json()["links"]
+    assert {link["file"]: link["exists"] for link in links} == {str(existing): True, missing: False}
+
+
+def test_api_inspect_missing_file_param_returns_400(tmp_path):
+    write_db_with_one_task(tmp_path)
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/inspect")
+    assert resp.status_code == 400
+
+
+def test_api_inspect_rejects_file_not_in_graph(tmp_path):
+    write_db_with_one_task(tmp_path)
+    write_graph(tmp_path, [])
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/inspect", query_string={"file": str(tmp_path / "anything.csv")})
+    assert resp.status_code == 403
+
+
+def test_api_inspect_reports_not_exists_for_known_but_missing_file(tmp_path):
+    write_db_with_one_task(tmp_path)
+    missing = str(tmp_path / "absent.csv")
+    write_graph(tmp_path, [
+        {"from_module": "a", "from_task": "t1", "to_module": "b", "to_task": "t2",
+         "file": missing, "extension": ".csv"},
+    ])
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/inspect", query_string={"file": missing})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"exists": False}
+
+
+def test_api_inspect_unsupported_extension_returns_friendly_text(tmp_path):
+    write_db_with_one_task(tmp_path)
+    present = tmp_path / "notes.txt"
+    present.write_text("hello", encoding="utf-8")
+    write_graph(tmp_path, [
+        {"from_module": "a", "from_task": "t1", "to_module": "b", "to_task": "t2",
+         "file": str(present), "extension": ".txt"},
+    ])
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/inspect", query_string={"file": str(present)})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["exists"] is True
+    assert body["data"] == {"format": "unsupported", "message": "No inspector available for '.txt' files yet."}
+
+
+def test_api_inspect_gdx_file_returns_real_structure(tmp_path):
+    write_db_with_one_task(tmp_path)
+    import gams.transfer as gt
+    import gamspy_base
+
+    container = gt.Container(system_directory=gamspy_base.directory)
+    i = gt.Set(container, "i", records=["a", "b"], description="a test set")
+    gt.Parameter(container, "p", domain=[i], records=[("a", 1.0), ("b", 2.0)], description="a test parameter")
+    gdx_path = tmp_path / "model.gdx"
+    container.write(str(gdx_path))
+
+    write_graph(tmp_path, [
+        {"from_module": "a", "from_task": "t1", "to_module": "b", "to_task": "t2",
+         "file": str(gdx_path), "extension": ".gdx"},
+    ])
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/inspect", query_string={"file": str(gdx_path)})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["exists"] is True
+    assert body["data"]["format"] == "gdx-symbols"
+    assert body["data"]["sections"] == [
+        {"title": "Sets", "symbols": [
+            {"name": "i", "dimension": 1, "elements": 2, "domains": ["*"], "description": "a test set"},
+        ]},
+        {"title": "Parameters", "symbols": [
+            {"name": "p", "dimension": 1, "elements": 2, "domains": ["i"], "description": "a test parameter"},
+        ]},
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +710,7 @@ def test_rebuild_writes_graph_json_and_api_graph_serves_it(tmp_path):
         assert graph["links"] == [{
             "from_module": "module_a", "from_task": "make_data",
             "to_module": "module_b", "to_task": "use_data",
-            "file": output_path, "extension": ".csv",
+            "file": output_path, "extension": ".csv", "exists": False,
         }]
 
 

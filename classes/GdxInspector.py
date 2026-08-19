@@ -39,22 +39,24 @@ class GdxInspector(FileInspector):
 
     extensions = (".gdx",)
 
-    def inspect(self, file_path: Union[str, Path]) -> str:
+    def inspect(self, file_path: Union[str, Path]) -> dict:
         """
-        Describe a GDX file's symbol structure as a human-readable string.
+        Describe a GDX file's symbol structure as JSON-serializable data.
 
         Parameters:
             file_path (str | Path): Path to the .gdx file to inspect.
 
         Returns:
-            str: A multi-line description grouping symbols by type, each with
-            its dimension count, domain names, element/record count, and
-            description text. A file that exists but isn't a valid/readable
-            GDX file (verified empirically: gams.transfer.Container.read()
-            fails silently on invalid input rather than raising, even for a
-            truncated real GDX file) comes back as a "0 symbols" report
-            rather than an exception -- there's no reliable signal from the
-            underlying library to distinguish that from a genuinely empty GDX.
+            dict: {"format": "gdx-symbols", "file_name", "symbol_count",
+            "sections": [{"title", "symbols": [{"name", "dimension",
+            "elements", "domains", "description"}, ...]}, ...]}, symbols
+            grouped by type and sorted by name within each section. A file
+            that exists but isn't a valid/readable GDX file (verified
+            empirically: gams.transfer.Container.read() fails silently on
+            invalid input rather than raising, even for a truncated real GDX
+            file) comes back as a 0-symbol/empty-sections result rather than
+            an exception -- there's no reliable signal from the underlying
+            library to distinguish that from a genuinely empty GDX.
 
         Raises:
             FileNotFoundError: If file_path does not exist.
@@ -72,50 +74,59 @@ class GdxInspector(FileInspector):
         except Exception as e:
             raise RuntimeError(f"Failed to read GDX file '{file_path}': {e}") from e
 
-        return self._format(file_path, container)
+        return self._build_data(file_path, container)
 
-    def _format(self, file_path: Path, container: "gt.Container") -> str:
+    def _build_data(self, file_path: Path, container: "gt.Container") -> dict:
         """
-        Build the final display string from an already-read Container.
+        Build the result dict from an already-read Container.
 
         Parameters:
-            file_path (Path): The inspected file's path (shown in the header).
+            file_path (Path): The inspected file's path (its name is included
+                in the result).
             container (gt.Container): The Container the file was read into.
 
         Returns:
-            str: The formatted, multi-line structure description.
+            dict: See inspect()'s docstring for the shape.
         """
         sections: dict = {}
         for name, symbol in container.data.items():
             type_name = type(symbol).__name__
-            sections.setdefault(type_name, []).append(self._format_symbol(name, symbol))
+            sections.setdefault(type_name, []).append(self._build_symbol(name, symbol))
 
         ordered_types = [t for t in _SECTION_ORDER if t in sections]
         ordered_types += sorted(t for t in sections if t not in _SECTION_ORDER)
 
-        lines = [f"GDX file: {file_path.name}", f"{len(container.data)} symbols", ""]
-        for type_name in ordered_types:
-            lines.append(_SECTION_TITLES.get(type_name, type_name))
-            lines.extend(sorted(sections[type_name]))
-            lines.append("")
+        return {
+            "format": "gdx-symbols",
+            "file_name": file_path.name,
+            "symbol_count": len(container.data),
+            "sections": [
+                {
+                    "title": _SECTION_TITLES.get(type_name, type_name),
+                    "symbols": sorted(sections[type_name], key=lambda s: s["name"]),
+                }
+                for type_name in ordered_types
+            ],
+        }
 
-        return "\n".join(lines).rstrip("\n")
-
-    def _format_symbol(self, name: str, symbol) -> str:
+    def _build_symbol(self, name: str, symbol) -> dict:
         """
-        Format a single symbol's line within its section.
+        Build one symbol's entry within its section.
 
         Parameters:
             name (str): The symbol's name.
             symbol: A gams.transfer Set/Parameter/Variable/Equation/Alias instance.
 
         Returns:
-            str: One formatted line, e.g. "  c (2 dim, 6 elements)  domains: i, j  transport cost".
+            dict: {"name", "dimension", "elements", "domains", "description"}.
+            "domains" is [] for a 0-dim symbol (there's nothing to name);
+            otherwise the symbol's domain names, which may include "*" for a
+            dimension that isn't domain-checked against a real set.
         """
-        domain_names = list(symbol.domain_names) if symbol.dimension else []
-        domains = ", ".join(domain_names) if domain_names else "-"
-        line = f"  {name} ({symbol.dimension} dim, {symbol.number_records} elements)  domains: {domains}"
-        description = getattr(symbol, "description", "") or ""
-        if description:
-            line += f"  {description}"
-        return line
+        return {
+            "name": name,
+            "dimension": symbol.dimension,
+            "elements": symbol.number_records,
+            "domains": list(symbol.domain_names) if symbol.dimension else [],
+            "description": getattr(symbol, "description", "") or "",
+        }

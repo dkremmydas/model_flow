@@ -8,13 +8,20 @@ from classes.Config import Config
 class FileInspector:
     """
     Base class for inspecting a data file's *structure* (not its full content)
-    and describing it as a human-readable string, so a GUI can show "what's
-    inside this file" without needing its own per-filetype rendering logic.
+    and describing it as JSON-serializable data, so a GUI can render "what's
+    inside this file" with its own formatting (e.g. bold names, italic domain
+    lists) instead of dumping one flat pre-formatted string.
 
     Subclasses declare which file extensions they handle via the class-level
-    `extensions` tuple and implement `inspect()`. Dispatch to the right
-    subclass for a given file happens through `FileInspector.get_inspector`/
-    `FileInspector.inspect_path`, keyed by extension.
+    `extensions` tuple and implement `inspect()`, returning a dict that
+    includes a "format" key identifying its shape (e.g. "gdx-symbols") so a
+    caller can render different inspector types differently -- there's no
+    single shared schema across file types, since what's naturally worth
+    showing (symbols vs. columns vs. whatever a future type needs) varies.
+
+    Dispatch to the right subclass for a given file happens through
+    `FileInspector.get_inspector`/`FileInspector.inspect_path`, keyed by
+    extension.
 
     Adding a new file type: write a new subclass in its own classes/*.py file
     (mirroring this repo's one-class-per-file convention), then add one entry
@@ -34,15 +41,16 @@ class FileInspector:
         """
         self.config = config
 
-    def inspect(self, file_path: Union[str, Path]) -> str:
+    def inspect(self, file_path: Union[str, Path]) -> dict:
         """
-        Describe the structure of the given file as a human-readable string.
+        Describe the structure of the given file as JSON-serializable data.
 
         Parameters:
             file_path (str | Path): Path to the file to inspect.
 
         Returns:
-            str: A human-readable description of the file's structure.
+            dict: A JSON-serializable description of the file's structure,
+            including a "format" key identifying its shape.
         """
         raise NotImplementedError
 
@@ -63,24 +71,26 @@ class FileInspector:
         return inspector_cls(config) if inspector_cls else None
 
     @classmethod
-    def inspect_path(cls, file_path: Union[str, Path], config: Config) -> str:
+    def inspect_path(cls, file_path: Union[str, Path], config: Config) -> dict:
         """
-        Convenience entry point: describe file_path's structure as a string,
-        or return a friendly explanation if no inspector supports its type.
+        Convenience entry point: describe file_path's structure as data, or
+        return a friendly explanation if no inspector supports its type.
 
         Parameters:
             file_path (str | Path): Path to the file to inspect.
             config (Config): Config instance passed through to the inspector.
 
         Returns:
-            str: The inspection result, or a "not supported yet" message for
-            an unregistered file extension. Real inspection failures (e.g. a
-            corrupt file) are raised, not swallowed into a string.
+            dict: The inspection result (see FileInspector.inspect), or
+            {"format": "unsupported", "message": ...} for an unregistered
+            file extension -- always a dict, regardless of path taken, so a
+            caller never has to branch on return type. Real inspection
+            failures (e.g. a corrupt file) are raised, not swallowed.
         """
         inspector = cls.get_inspector(file_path, config)
         if inspector is None:
             extension = Path(file_path).suffix or "(no extension)"
-            return f"No inspector available for '{extension}' files yet."
+            return {"format": "unsupported", "message": f"No inspector available for '{extension}' files yet."}
         return inspector.inspect(file_path)
 
 

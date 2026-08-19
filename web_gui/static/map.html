@@ -32,6 +32,7 @@
       <div class="mb-3">
         <div class="form-label small fw-semibold">File types</div>
         <div id="map-extension-filter"></div>
+        <div class="text-muted small fst-italic mt-1">Dashed = file not yet created</div>
       </div>
       <div class="mb-3">
         <div class="form-label small fw-semibold">Expanded modules</div>
@@ -62,12 +63,16 @@
       </details>
     </div>
 
+    <div id="map-search-resize-handle" class="map-resize-handle" title="Drag to resize"></div>
+
     <div id="map-svg-pane" class="flex-grow-1 position-relative overflow-hidden">
       <div id="map-empty-message" class="text-muted p-3 d-none">
         No graph built yet -- run "Rebuild database" from the main page first.
       </div>
       <svg id="map-svg"></svg>
     </div>
+
+    <div id="map-detail-resize-handle" class="map-resize-handle" title="Drag to resize"></div>
 
     <div id="map-detail-pane" class="border-start p-3 overflow-auto flex-shrink-0">
       <div id="map-detail-empty" class="text-muted">Click a node or connection to see its details.</div>
