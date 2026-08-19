@@ -179,10 +179,14 @@ function renderModuleFilter() {
     container.innerHTML = "";
     for (const moduleName of Object.keys(graphData.modules).sort()) {
         const id = `mod-${moduleName.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        // Checkbox itself is colored as a solid swatch of the module's graph
+        // color (not just when checked) -- doubles as a legend so this list
+        // is both the filter and the color key, with no separate UI needed.
+        const color = moduleColorScale(moduleName);
         const wrapper = document.createElement("div");
         wrapper.className = "form-check";
         wrapper.innerHTML = `
-            <input class="form-check-input" type="checkbox" id="${id}" ${hiddenModules.has(moduleName) ? "" : "checked"}>
+            <input class="form-check-input" type="checkbox" id="${id}" style="background-color:${color};border-color:${color}" ${hiddenModules.has(moduleName) ? "" : "checked"}>
             <label class="form-check-label small" for="${id}">${moduleName}</label>
         `;
         wrapper.querySelector("input").addEventListener("change", (e) => {
