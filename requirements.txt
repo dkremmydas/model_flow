@@ -3,3 +3,5 @@ rich
 numpy
 flask
 flask-sock
+gamsapi[transfer]==54.3.0
+gamspy-base==54.3.0
