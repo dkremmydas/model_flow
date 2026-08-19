@@ -5,6 +5,7 @@ import pytest
 from classes.Config import Config
 from classes.FileInspector import FileInspector
 from classes.GdxInspector import GdxInspector
+from classes.RdsInspector import RdsInspector
 
 
 def make_config(tmp_path) -> Config:
@@ -32,6 +33,14 @@ def test_get_inspector_is_case_insensitive(tmp_path):
     inspector = FileInspector.get_inspector("MODEL.GDX", config)
 
     assert isinstance(inspector, GdxInspector)
+
+
+def test_get_inspector_resolves_rds_extension(tmp_path):
+    config = make_config(tmp_path)
+
+    inspector = FileInspector.get_inspector("model.rds", config)
+
+    assert isinstance(inspector, RdsInspector)
 
 
 def test_get_inspector_returns_none_for_unknown_extension(tmp_path):

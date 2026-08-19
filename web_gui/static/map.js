@@ -809,6 +809,8 @@ function renderInspectResult(container, data) {
     container.innerHTML = "";
     if (data && data.format === "gdx-symbols") {
         renderGdxSymbols(container, data);
+    } else if (data && data.format === "rds-object") {
+        renderRdsObject(container, data);
     } else if (data && data.message) {
         container.textContent = data.message;
     } else {
@@ -863,6 +865,89 @@ function buildGdxSymbolRow(symbol) {
         desc.textContent = symbol.description;
         row.appendChild(desc);
     }
+
+    return row;
+}
+
+function renderRdsObject(container, data) {
+    const classLine = document.createElement("div");
+    classLine.className = "mb-2";
+    const primary = document.createElement("strong");
+    primary.textContent = data.primary_class;
+    classLine.appendChild(primary);
+    if (data.classes.length > 1) {
+        classLine.appendChild(document.createTextNode(" "));
+        const chain = document.createElement("span");
+        chain.className = "map-inspect-classchain";
+        chain.textContent = `(${data.classes.join(", ")})`;
+        classLine.appendChild(chain);
+    }
+    container.appendChild(classLine);
+
+    const detail = data.detail;
+    if (!detail) return; // Class alone is the whole story for an unhandled type.
+
+    if (detail.kind === "data_frame") {
+        renderRdsDataFrame(container, detail);
+    } else if (detail.kind === "matrix") {
+        renderRdsMatrix(container, detail);
+    } else if (detail.kind === "list") {
+        renderRdsList(container, detail);
+    }
+}
+
+function renderRdsDataFrame(container, detail) {
+    const summary = document.createElement("div");
+    summary.className = "text-muted mb-2";
+    summary.textContent = `${detail.rows} rows × ${detail.columns} columns`;
+    container.appendChild(summary);
+
+    if (detail.sf) {
+        const sfLine = document.createElement("div");
+        sfLine.className = "map-inspect-description mb-2";
+        sfLine.textContent = `geometry: ${detail.sf.geometry_types.join(", ")} (${detail.sf.geometry_column})  crs: ${detail.sf.crs}`;
+        container.appendChild(sfLine);
+    }
+
+    detail.column_names.forEach((name, i) => container.appendChild(buildRdsFieldRow(name, detail.column_classes[i])));
+}
+
+function renderRdsMatrix(container, detail) {
+    const line = document.createElement("div");
+    line.textContent = `dim: ${detail.dim.join(" × ")}`;
+    line.appendChild(document.createTextNode(" "));
+    const type = document.createElement("span");
+    type.className = "map-inspect-domains";
+    type.textContent = detail.type;
+    line.appendChild(type);
+    container.appendChild(line);
+}
+
+function renderRdsList(container, detail) {
+    const summary = document.createElement("div");
+    summary.className = "text-muted mb-2";
+    summary.textContent = `${detail.length} elements`;
+    container.appendChild(summary);
+
+    detail.element_classes.forEach((cls, i) => {
+        const name = detail.names && detail.names[i] ? detail.names[i] : `[[${i + 1}]]`;
+        container.appendChild(buildRdsFieldRow(name, cls));
+    });
+}
+
+function buildRdsFieldRow(name, cls) {
+    const row = document.createElement("div");
+    row.className = "map-inspect-symbol mb-1";
+
+    const nameEl = document.createElement("strong");
+    nameEl.textContent = name;
+    row.appendChild(nameEl);
+
+    row.appendChild(document.createTextNode(" "));
+    const clsEl = document.createElement("span");
+    clsEl.className = "map-inspect-domains";
+    clsEl.textContent = cls;
+    row.appendChild(clsEl);
 
     return row;
 }

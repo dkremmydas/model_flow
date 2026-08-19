@@ -105,6 +105,7 @@ class FileInspector:
 # FileInspector, setting `extensions`), then add one entry here.
 _INSPECTOR_MODULES = {
     ".gdx": ("classes.GdxInspector", "GdxInspector"),
+    ".rds": ("classes.RdsInspector", "RdsInspector"),
 }
 
 _resolved_cache: dict = {}

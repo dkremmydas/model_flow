@@ -288,6 +288,11 @@ body.map-resizing {
     color: var(--bs-secondary-color);
 }
 
+.map-inspect-classchain {
+    color: var(--bs-secondary-color);
+    font-size: 0.875em;
+}
+
 .map-arrow {
     fill: var(--bs-secondary-color);
 }
