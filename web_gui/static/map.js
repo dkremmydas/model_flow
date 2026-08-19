@@ -1,22 +1,26 @@
 // Model Flow dependency map. Its own page (not app.js) -- fetches /api/graph
 // (built by "Rebuild database" / the CLI `build` command from role="input_file"/
 // role="output_file" config entries, see classes/Parser.py's build_graph) and
-// renders it as a single D3 force-directed graph: every module starts
-// collapsed (shown as one node); clicking a collapsed module expands it in
-// place into its own task nodes, without hiding any other module -- there is
-// no separate "module view"/"task view" to navigate between, just an
-// expanded/collapsed state per module within one continuous graph.
+// renders it as a single D3-rendered, dagre-laid-out layered (Sugiyama-style)
+// graph: every module starts collapsed (shown as one node); clicking a
+// collapsed module expands it in place into its own task nodes, without
+// hiding any other module -- there is no separate "module view"/"task view"
+// to navigate between, just an expanded/collapsed state per module within one
+// continuous graph. Layout is computed once per render by dagre (vendored as
+// /dagre.min.js); D3 only handles drawing, zoom/pan, drag, and interaction --
+// there is no continuous physics simulation.
 
 let graphData = null;
 let expandedModules = new Set();
 let selectedNodeId = null;
 let selectedExtensions = new Set();
-let simulation = null;
+let currentEdges = [];
+let lastLayoutSize = null;
 let moduleColorScale = null;
 
 // Modules unchecked in the "Modules" sidebar list -- excluded entirely from
 // computeGraph()'s nodes/edges (not just dimmed like the extension filter),
-// since a hidden node's id would otherwise still be referenced by d3.forceLink.
+// since a hidden node's id would otherwise still be referenced by a dagre edge.
 const HIDDEN_MODULES_STORAGE_KEY = "modelflow.map.hiddenModules";
 let hiddenModules = loadHiddenModules();
 
@@ -45,18 +49,18 @@ function saveHiddenModules() {
 // relies on color alone even when hues repeat.
 const MODULE_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
 
-// ---- Layout settings (sliders in the "Settings" sidebar section) -----------
+// ---- Layout settings (controls in the "Settings" sidebar section) ----------
 // Persisted the same way index.html/app.js persists its own UI state
 // (localStorage, best-effort -- absent/corrupt storage just falls back to
-// LAYOUT_DEFAULTS rather than breaking the page).
+// LAYOUT_DEFAULTS rather than breaking the page). These map directly onto
+// dagre.graphlib's own graph-level layout options (rankdir/ranksep/nodesep).
 
 const LAYOUT_STORAGE_KEY = "modelflow.map.layout";
-const LAYOUT_DEFAULTS = { linkDistance: 55, repulsion: 140, collideRadius: 26, centerPull: 0.06 };
+const LAYOUT_DEFAULTS = { rankdir: "LR", ranksep: 70, nodesep: 40 };
 const LAYOUT_FIELDS = [
-    { id: "setting-link-distance", key: "linkDistance", format: (v) => v },
-    { id: "setting-repulsion", key: "repulsion", format: (v) => v },
-    { id: "setting-collision", key: "collideRadius", format: (v) => v },
-    { id: "setting-center-pull", key: "centerPull", format: (v) => v.toFixed(2) },
+    { id: "setting-rank-direction", key: "rankdir", type: "select" },
+    { id: "setting-rank-sep", key: "ranksep", type: "range", format: (v) => v },
+    { id: "setting-node-sep", key: "nodesep", type: "range", format: (v) => v },
 ];
 
 function loadLayoutSettings() {
@@ -80,24 +84,24 @@ let layoutSettings = loadLayoutSettings();
 function syncLayoutInputs() {
     for (const field of LAYOUT_FIELDS) {
         document.getElementById(field.id).value = layoutSettings[field.key];
-        document.getElementById(`${field.id}-value`).textContent = field.format(layoutSettings[field.key]);
+        if (field.type === "range") {
+            document.getElementById(`${field.id}-value`).textContent = field.format(layoutSettings[field.key]);
+        }
     }
 }
 
 function applyLayoutSettings() {
-    if (!simulation) return;
-    simulation.force("link").distance(layoutSettings.linkDistance);
-    simulation.force("charge").strength(-layoutSettings.repulsion);
-    simulation.force("collide").radius(layoutSettings.collideRadius);
-    simulation.force("x").strength(layoutSettings.centerPull);
-    simulation.force("y").strength(layoutSettings.centerPull);
-    simulation.alpha(0.5).restart();
+    // Layout is one-shot (no live physics to nudge), so a settings change just
+    // triggers a full recompute-and-redraw with the new dagre graph options.
+    if (graphData) render();
 }
 
 for (const field of LAYOUT_FIELDS) {
     document.getElementById(field.id).addEventListener("input", (e) => {
-        layoutSettings[field.key] = parseFloat(e.target.value);
-        document.getElementById(`${field.id}-value`).textContent = field.format(layoutSettings[field.key]);
+        layoutSettings[field.key] = field.type === "range" ? parseFloat(e.target.value) : e.target.value;
+        if (field.type === "range") {
+            document.getElementById(`${field.id}-value`).textContent = field.format(layoutSettings[field.key]);
+        }
         applyLayoutSettings();
         saveLayoutSettings();
     });
@@ -162,6 +166,7 @@ fetch("/api/graph")
         // static per graph load, so this only needs to run once here.
         renderModuleFilter();
         render();
+        if (lastLayoutSize) fitToViewport(lastLayoutSize.width, lastLayoutSize.height);
     })
     .catch(() => {
         document.getElementById("map-empty-message").classList.remove("d-none");
@@ -239,10 +244,10 @@ function taskNodeId(moduleName, taskName) {
 }
 
 function computeGraph() {
-    // Carry over each surviving node's position/velocity so expanding or
-    // collapsing one module doesn't jolt every other node on screen.
-    const previous = new Map((simulation ? simulation.nodes() : []).map((n) => [n.id, n]));
-
+    // No position carry-over across re-renders: dagre has no warm-start, it
+    // recomputes ranks/order from scratch on every layout, so a structural
+    // change (expanding/collapsing a module) can legitimately shift every
+    // downstream node -- seeding old x/y wouldn't be honored anyway.
     const nodes = [];
     for (const moduleName of Object.keys(graphData.modules)) {
         if (hiddenModules.has(moduleName)) continue;
@@ -253,10 +258,6 @@ function computeGraph() {
         } else {
             nodes.push({ id: moduleName, label: moduleName, kind: "module", module: moduleName });
         }
-    }
-    for (const node of nodes) {
-        const prev = previous.get(node.id);
-        if (prev) Object.assign(node, { x: prev.x, y: prev.y, vx: prev.vx, vy: prev.vy });
     }
 
     const endpointId = (moduleName, taskName) =>
@@ -323,6 +324,67 @@ document.addEventListener("keydown", (e) => {
     }
 });
 
+// ---- Layout computation (dagre) ----------------------------------------------
+
+const NODE_SHAPE = {
+    module: { r: 16, dy: 30 },
+    task: { r: 12, dy: 26 },
+};
+
+function measureLabelWidth(text) {
+    // Cached offscreen canvas context; font must match .map-node text's CSS.
+    if (!measureLabelWidth.ctx) measureLabelWidth.ctx = document.createElement("canvas").getContext("2d");
+    measureLabelWidth.ctx.font = "11px sans-serif";
+    return measureLabelWidth.ctx.measureText(text).width;
+}
+
+function computeDagreLayout(nodes, edges) {
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: layoutSettings.rankdir, nodesep: layoutSettings.nodesep, ranksep: layoutSettings.ranksep });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    for (const n of nodes) {
+        const shape = NODE_SHAPE[n.kind];
+        // Node box includes the label drawn *below* the circle (dy), not just
+        // the circle itself -- otherwise nodesep/ranksep would let neighboring
+        // labels overlap even though the circles themselves don't.
+        g.setNode(n.id, { width: Math.max(shape.r * 2, measureLabelWidth(n.label) + 6), height: shape.dy + 14 });
+    }
+    for (const e of edges) g.setEdge(e.source, e.target);
+
+    dagre.layout(g);
+    return g;
+}
+
+// Straight segments only (default curveLinear) -- a smoothing curve wouldn't
+// pass exactly through the endpoints, which would break the arrowhead
+// marker's refX pullback (it assumes the final path segment ends exactly at
+// the target node's center).
+const edgeLineGen = d3.line().x((d) => d.x).y((d) => d.y);
+
+function redrawEdgePath(e) {
+    const source = { x: e.source.x, y: e.source.y };
+    const target = { x: e.target.x, y: e.target.y };
+    if (!e.points || e.points.length < 2) return edgeLineGen([source, target]);
+    const points = e.points.slice();
+    points[0] = source;
+    points[points.length - 1] = target;
+    return edgeLineGen(points);
+}
+
+function fitToViewport(graphWidth, graphHeight) {
+    if (!graphWidth || !graphHeight) return;
+    const { width, height } = svgSize();
+    const padding = 40;
+    const scale = Math.min((width - padding * 2) / graphWidth, (height - padding * 2) / graphHeight, 1.5);
+    const tx = (width - graphWidth * scale) / 2;
+    const ty = (height - graphHeight * scale) / 2;
+    svg.transition().duration(400).call(
+        zoomBehavior.transform,
+        d3.zoomIdentity.translate(tx, ty).scale(Math.max(scale, 0.1))
+    );
+}
+
 // ---- Rendering --------------------------------------------------------------
 
 function renderGraph(nodes, edges) {
@@ -340,15 +402,24 @@ function renderGraph(nodes, edges) {
 
     linkLayer.selectAll("*").remove();
     nodeLayer.selectAll("*").remove();
-    if (simulation) simulation.stop();
 
-    const { width, height } = svgSize();
+    const g = computeDagreLayout(nodes, edges);
+    const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    for (const n of nodes) Object.assign(n, g.node(n.id));
+    for (const e of edges) {
+        e.source = nodeById.get(e.source);
+        e.target = nodeById.get(e.target);
+        e.points = g.edge(e.source.id, e.target.id).points;
+    }
+    currentEdges = edges;
+    lastLayoutSize = { width: g.graph().width, height: g.graph().height };
 
-    const linkSel = linkLayer.selectAll("line")
+    const linkSel = linkLayer.selectAll("path")
         .data(edges)
-        .join("line")
+        .join("path")
         .attr("class", "map-link")
-        .attr("marker-end", "url(#arrowhead)");
+        .attr("marker-end", "url(#arrowhead)")
+        .attr("d", redrawEdgePath);
 
     linkSel.each(function (d) {
         d3.select(this).append("title").text(
@@ -368,7 +439,8 @@ function renderGraph(nodes, edges) {
                 .attr("text-anchor", "middle")
                 .text((d) => d.label);
             return g;
-        });
+        })
+        .attr("transform", (d) => `translate(${d.x},${d.y})`);
 
     nodeGroup.on("click", (event, d) => {
         event.stopPropagation();
@@ -380,42 +452,18 @@ function renderGraph(nodes, edges) {
     });
     nodeGroup.call(
         d3.drag()
-            .on("start", (event, d) => {
-                if (!event.active) simulation.alphaTarget(0.3).restart();
-                d.fx = d.x;
-                d.fy = d.y;
+            .on("start", function () {
+                d3.select(this).raise();
             })
-            .on("drag", (event, d) => {
-                d.fx = event.x;
-                d.fy = event.y;
-            })
-            .on("end", (event, d) => {
-                if (!event.active) simulation.alphaTarget(0);
-                d.fx = null;
-                d.fy = null;
+            .on("drag", function (event, d) {
+                d.x = event.x;
+                d.y = event.y;
+                d3.select(this).attr("transform", `translate(${d.x},${d.y})`);
+                linkLayer.selectAll("path")
+                    .filter((e) => e.source === d || e.target === d)
+                    .attr("d", redrawEdgePath);
             })
     );
-
-    simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(edges).id((d) => d.id).distance(layoutSettings.linkDistance))
-        .force("charge", d3.forceManyBody().strength(-layoutSettings.repulsion))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collide", d3.forceCollide(layoutSettings.collideRadius))
-        // forceCenter only recenters the overall centroid -- it doesn't pull
-        // individual nodes together, so a disconnected node (no forceLink
-        // attraction at all) just drifts outward under charge repulsion with
-        // nothing to stop it. A mild per-node pull toward the middle keeps the
-        // whole graph compact even when most nodes have no links.
-        .force("x", d3.forceX(width / 2).strength(layoutSettings.centerPull))
-        .force("y", d3.forceY(height / 2).strength(layoutSettings.centerPull))
-        .on("tick", () => {
-            linkLayer.selectAll("line")
-                .attr("x1", (d) => d.source.x)
-                .attr("y1", (d) => d.source.y)
-                .attr("x2", (d) => d.target.x)
-                .attr("y2", (d) => d.target.y);
-            nodeGroup.attr("transform", (d) => `translate(${d.x},${d.y})`);
-        });
 
     applyExtensionFilter();
     applyChainHighlight();
@@ -448,7 +496,7 @@ function renderExtensionFilter(extensions) {
 }
 
 function applyExtensionFilter() {
-    linkLayer.selectAll("line").classed("filtered-out", (d) =>
+    linkLayer.selectAll("path").classed("filtered-out", (d) =>
         !d.contributions.some((c) => selectedExtensions.has(c.extension || "(none)"))
     );
 }
@@ -480,17 +528,16 @@ function connectedNodeIds(nodeId, edges) {
 }
 
 function applyChainHighlight() {
-    const edges = simulation ? simulation.force("link").links() : [];
     if (!selectedNodeId) {
         nodeLayer.selectAll("g.map-node").classed("not-in-chain", false).classed("selected", false);
-        linkLayer.selectAll("line").classed("not-in-chain", false);
+        linkLayer.selectAll("path").classed("not-in-chain", false);
         return;
     }
-    const chain = connectedNodeIds(selectedNodeId, edges);
+    const chain = connectedNodeIds(selectedNodeId, currentEdges);
     nodeLayer.selectAll("g.map-node")
         .classed("not-in-chain", (d) => !chain.has(d.id))
         .classed("selected", (d) => d.id === selectedNodeId);
-    linkLayer.selectAll("line").classed("not-in-chain", (d) => {
+    linkLayer.selectAll("path").classed("not-in-chain", (d) => {
         const sourceId = typeof d.source === "object" ? d.source.id : d.source;
         const targetId = typeof d.target === "object" ? d.target.id : d.target;
         return !(chain.has(sourceId) && chain.has(targetId));
@@ -567,11 +614,3 @@ function showTaskDetail(node) {
         });
 }
 
-window.addEventListener("resize", () => {
-    if (!simulation) return;
-    const { width, height } = svgSize();
-    simulation.force("center", d3.forceCenter(width / 2, height / 2));
-    simulation.force("x", d3.forceX(width / 2).strength(layoutSettings.centerPull));
-    simulation.force("y", d3.forceY(height / 2).strength(layoutSettings.centerPull));
-    simulation.alpha(0.3).restart();
-});

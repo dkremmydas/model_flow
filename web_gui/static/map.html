@@ -40,28 +40,23 @@
       <details>
         <summary class="form-label small fw-semibold">Settings</summary>
         <div class="map-setting">
-          <label class="form-label small d-flex justify-content-between mb-0" for="setting-link-distance">
-            <span>Link distance</span><span id="setting-link-distance-value"></span>
-          </label>
-          <input type="range" class="form-range" id="setting-link-distance" min="20" max="200" step="5">
+          <label class="form-label small mb-0" for="setting-rank-direction">Direction</label>
+          <select class="form-select form-select-sm" id="setting-rank-direction">
+            <option value="TB">Top to bottom</option>
+            <option value="LR" selected>Left to right</option>
+          </select>
         </div>
         <div class="map-setting">
-          <label class="form-label small d-flex justify-content-between mb-0" for="setting-repulsion">
-            <span>Repulsion</span><span id="setting-repulsion-value"></span>
+          <label class="form-label small d-flex justify-content-between mb-0" for="setting-rank-sep">
+            <span>Rank spacing</span><span id="setting-rank-sep-value"></span>
           </label>
-          <input type="range" class="form-range" id="setting-repulsion" min="20" max="400" step="10">
+          <input type="range" class="form-range" id="setting-rank-sep" min="20" max="200" step="10">
         </div>
         <div class="map-setting">
-          <label class="form-label small d-flex justify-content-between mb-0" for="setting-collision">
-            <span>Node spacing</span><span id="setting-collision-value"></span>
+          <label class="form-label small d-flex justify-content-between mb-0" for="setting-node-sep">
+            <span>Node spacing</span><span id="setting-node-sep-value"></span>
           </label>
-          <input type="range" class="form-range" id="setting-collision" min="10" max="60" step="2">
-        </div>
-        <div class="map-setting">
-          <label class="form-label small d-flex justify-content-between mb-0" for="setting-center-pull">
-            <span>Center pull</span><span id="setting-center-pull-value"></span>
-          </label>
-          <input type="range" class="form-range" id="setting-center-pull" min="0" max="0.3" step="0.01">
+          <input type="range" class="form-range" id="setting-node-sep" min="10" max="100" step="5">
         </div>
         <button id="setting-reset-btn" class="btn btn-outline-secondary btn-sm mt-1">Reset to defaults</button>
       </details>
@@ -86,6 +81,7 @@
   </div>
 
   <script src="/d3.min.js"></script>
+  <script src="/dagre.min.js"></script>
   <script src="/description.js"></script>
   <script src="/map.js"></script>
 </body>
