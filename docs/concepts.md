@@ -8,9 +8,10 @@ only brief definitions.
    convention, a module is contained inside a unique folder.
 
 2. **Task** — a unit of work: a single self-contained script. It follows the
-   black-box pattern, reading one or more input files and producing one or
-   more output files, with its behavior controlled by configuration
-   parameters. A task belongs to exactly one module.
+   black-box pattern, reading one or more input files (or folders) and
+   producing one or more output files (or folders), with its behavior
+   controlled by configuration parameters. A task belongs to exactly one
+   module.
 
 3. **Pipeline** — a structured, ordered series of tasks within one module, run
    automatically with no manual intervention, stopping at the first failure.

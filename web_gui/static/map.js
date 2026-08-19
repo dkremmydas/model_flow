@@ -811,6 +811,8 @@ function renderInspectResult(container, data) {
         renderGdxSymbols(container, data);
     } else if (data && data.format === "rds-object") {
         renderRdsObject(container, data);
+    } else if (data && data.format === "folder-listing") {
+        renderFolderListing(container, data);
     } else if (data && data.message) {
         container.textContent = data.message;
     } else {
@@ -948,6 +950,69 @@ function buildRdsFieldRow(name, cls) {
     clsEl.className = "map-inspect-domains";
     clsEl.textContent = cls;
     row.appendChild(clsEl);
+
+    return row;
+}
+
+function formatBytes(bytes) {
+    if (bytes === null || bytes === undefined) return "unknown size";
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ["KB", "MB", "GB", "TB"];
+    let value = bytes / 1024;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${value.toFixed(value < 10 ? 2 : 1)} ${units[unit]}`;
+}
+
+function renderFolderListing(container, data) {
+    const summary = document.createElement("div");
+    summary.className = "text-muted mb-2";
+    summary.textContent =
+        `${data.item_count} item${data.item_count === 1 ? "" : "s"} ` +
+        `(${data.file_count} file${data.file_count === 1 ? "" : "s"}, ` +
+        `${data.dir_count} folder${data.dir_count === 1 ? "" : "s"}), ` +
+        `${formatBytes(data.total_size_bytes)} total`;
+    container.appendChild(summary);
+
+    const extensions = Object.keys(data.extension_counts || {});
+    if (extensions.length) {
+        const extLine = document.createElement("div");
+        extLine.className = "map-inspect-description mb-2";
+        extLine.textContent = extensions
+            .sort()
+            .map((ext) => `${ext} × ${data.extension_counts[ext]}`)
+            .join(", ");
+        container.appendChild(extLine);
+    }
+
+    for (const item of data.items) {
+        container.appendChild(buildFolderItemRow(item));
+    }
+
+    if (data.truncated) {
+        const note = document.createElement("div");
+        note.className = "map-inspect-description mt-1";
+        note.textContent = `Showing the first ${data.items.length} of ${data.item_count} items.`;
+        container.appendChild(note);
+    }
+}
+
+function buildFolderItemRow(item) {
+    const row = document.createElement("div");
+    row.className = "map-inspect-symbol mb-1";
+
+    const name = document.createElement("strong");
+    name.textContent = item.name;
+    row.appendChild(name);
+
+    row.appendChild(document.createTextNode(" "));
+    const meta = document.createElement("span");
+    meta.className = "map-inspect-domains";
+    meta.textContent = item.type === "dir" ? "folder" : formatBytes(item.size_bytes);
+    row.appendChild(meta);
 
     return row;
 }

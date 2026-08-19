@@ -21,11 +21,14 @@ class FileInspector:
 
     Dispatch to the right subclass for a given file happens through
     `FileInspector.get_inspector`/`FileInspector.inspect_path`, keyed by
-    extension.
+    extension -- except a directory, which has no meaningful extension and is
+    instead always routed to `FolderInspector` (see `_resolve_folder` below).
 
     Adding a new file type: write a new subclass in its own classes/*.py file
     (mirroring this repo's one-class-per-file convention), then add one entry
-    to `_INSPECTOR_MODULES` below.
+    to `_INSPECTOR_MODULES` below. (A directory input/output is already
+    handled by `FolderInspector` -- there's no per-extension registration
+    needed there, since dispatch for it isn't extension-based.)
     """
 
     extensions: tuple = ()
@@ -57,17 +60,20 @@ class FileInspector:
     @classmethod
     def get_inspector(cls, file_path: Union[str, Path], config: Config) -> Optional["FileInspector"]:
         """
-        Look up and instantiate the inspector registered for file_path's extension.
+        Look up and instantiate the inspector for file_path: by directory-ness
+        first (routed to FolderInspector), then by extension.
 
         Parameters:
-            file_path (str | Path): Path to the file to inspect.
+            file_path (str | Path): Path to the file or directory to inspect.
             config (Config): Config instance passed through to the inspector.
 
         Returns:
             FileInspector: An instantiated inspector, or None if no inspector
-            is registered for this file's extension.
+            is registered for this file's extension. A directory always
+            resolves to FolderInspector.
         """
-        inspector_cls = _resolve(Path(file_path).suffix.lower())
+        path = Path(file_path)
+        inspector_cls = _resolve_folder() if path.is_dir() else _resolve(path.suffix.lower())
         return inspector_cls(config) if inspector_cls else None
 
     @classmethod
@@ -108,7 +114,13 @@ _INSPECTOR_MODULES = {
     ".rds": ("classes.RdsInspector", "RdsInspector"),
 }
 
+# Directories dispatch here instead -- there's exactly one way to inspect "a
+# directory" (FolderInspector), so unlike files there's no extension to key a
+# registry by.
+_FOLDER_INSPECTOR = ("classes.FolderInspector", "FolderInspector")
+
 _resolved_cache: dict = {}
+_resolved_folder_cache: dict = {}
 
 
 def _resolve(extension: str) -> Optional[Type[FileInspector]]:
@@ -121,3 +133,10 @@ def _resolve(extension: str) -> Optional[Type[FileInspector]]:
     inspector_cls = getattr(importlib.import_module(module_name), class_name)
     _resolved_cache[extension] = inspector_cls
     return inspector_cls
+
+
+def _resolve_folder() -> Type[FileInspector]:
+    if "cls" not in _resolved_folder_cache:
+        module_name, class_name = _FOLDER_INSPECTOR
+        _resolved_folder_cache["cls"] = getattr(importlib.import_module(module_name), class_name)
+    return _resolved_folder_cache["cls"]

@@ -60,12 +60,18 @@ input_file = "d.fadn/output/data.csv"
 
 - `name` (explicit) — the logical name of the config entry (what `--set` and
   the GUI refer to).
-- `role` (explicit) — one of `input_file`, `output_file`, `parameter`.
+- `role` (explicit) — one of `input_file`, `output_file`, `parameter`. An
+  `input_file`/`output_file` value may point at a folder as well as a single
+  file (e.g. a directory of per-region outputs) — Model Flow doesn't
+  distinguish the two beyond how the file inspector in the web GUI's
+  dependency map understands it: a single-file value is inspected by
+  extension (e.g. `.gdx`, `.rds`), while a folder value is inspected as a
+  directory listing.
 - `type` (explicit) — `number` or `string`; only meaningful when
   `role="parameter"`.
 - `relative` (explicit) — `1` or `0`, only meaningful for
-  `input_file`/`output_file`: whether the path is relative to
-  `Database_directory`. Defaults to `1` (relative) if omitted.
+  `input_file`/`output_file`: whether the path (file or folder) is relative
+  to `Database_directory`. Defaults to `1` (relative) if omitted.
 - `script_name` (implicit) — the variable name as it appears in the script;
   what actually gets passed back into the script at run time.
 - `script_value` (implicit) — the literal default value currently written in

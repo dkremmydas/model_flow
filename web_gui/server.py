@@ -370,9 +370,10 @@ def create_app(config: Config) -> Flask:
         # exists is computed live on every request, not baked in at build time
         # -- a file's existence changes as tasks run, independent of when the
         # graph itself was last rebuilt (mirrors /api/run/<id>/outputs' own
-        # {"exists": resolved.is_file()} pattern).
+        # {"exists": resolved.exists()} pattern). .exists() rather than
+        # .is_file() since an input/output can also be a folder.
         for link in graph.get("links", []):
-            link["exists"] = Path(link["file"]).is_file()
+            link["exists"] = Path(link["file"]).exists()
         return jsonify(graph)
 
     @app.route("/api/inspect")
@@ -392,10 +393,11 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "file is not part of the dependency graph"}), 403
 
         resolved = Path(file_path)
-        if not resolved.is_file():
+        if not resolved.exists():
             # Race-condition backstop -- the frontend already knows a file's
             # existence from /api/graph and won't normally offer to inspect
-            # one it knows doesn't exist yet.
+            # one it knows doesn't exist yet. .exists() rather than
+            # .is_file() since an input/output can also be a folder.
             return jsonify({"exists": False})
 
         try:
@@ -424,7 +426,7 @@ def create_app(config: Config) -> Flask:
                 if value is None:
                     continue
                 resolved = Parser.resolve_role_path(config.get("Database_directory"), value, param.get("relative"))
-                files.append({"script_name": script_name, "value": value, "exists": resolved.is_file()})
+                files.append({"script_name": script_name, "value": value, "exists": resolved.exists()})
             if files:
                 result.append({"module": info["module"], "task": info["task"], "files": files})
         return jsonify(result)
