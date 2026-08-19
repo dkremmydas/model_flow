@@ -297,9 +297,10 @@ body.map-resizing {
     fill: var(--bs-secondary-color);
 }
 
-/* fill is set per-node by map.js (moduleColorScale), not here -- a task node's
-   circle is colored the same as the module it belongs to. */
-.map-node circle {
+/* fill is set per-node by map.js (moduleColorScale), not here -- a node's
+   shape (circle for a task, square for a module -- see map.js) is colored
+   the same as the module it belongs to. */
+.map-node .map-node-shape {
     cursor: pointer;
     stroke: var(--bs-body-bg);
     stroke-width: 1.5px;
@@ -316,8 +317,8 @@ body.map-resizing {
     opacity: 0.15;
 }
 
-.map-node.selected circle,
-.map-node.search-match circle {
+.map-node.selected .map-node-shape,
+.map-node.search-match .map-node-shape {
     stroke: var(--bs-warning);
     stroke-width: 3px;
 }

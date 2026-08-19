@@ -546,8 +546,24 @@ function renderGraph(nodes, edges) {
         .data(nodes, (d) => d.id)
         .join((enter) => {
             const g = enter.append("g").attr("class", (d) => `map-node map-node-${d.kind}`);
-            g.append("circle")
-                .attr("r", (d) => (d.kind === "module" ? 16 : 12))
+            // Modules are squares, tasks are circles -- a shape distinction
+            // (on top of the existing size/color ones) makes it easier to
+            // tell the two kinds of node apart at a glance. Both shapes share
+            // the "map-node-shape" class so styling/selection CSS doesn't
+            // need to know which element each kind actually is.
+            g.filter((d) => d.kind === "module")
+                .append("rect")
+                .attr("class", "map-node-shape")
+                .attr("x", -16)
+                .attr("y", -16)
+                .attr("width", 32)
+                .attr("height", 32)
+                .attr("rx", 4)
+                .attr("fill", (d) => moduleColorScale(d.module));
+            g.filter((d) => d.kind !== "module")
+                .append("circle")
+                .attr("class", "map-node-shape")
+                .attr("r", 12)
                 .attr("fill", (d) => moduleColorScale(d.module));
             g.append("text")
                 .attr("dy", (d) => (d.kind === "module" ? 30 : 26))
@@ -779,17 +795,32 @@ function buildInspectableFileItem(file) {
     output.className = "map-file-inspect-output small d-none";
     li.appendChild(output);
 
+    attachInspectToggle(link, output, file);
+
+    return li;
+}
+
+// Wires a click-to-expand inspect panel onto `link`, fetching /api/inspect
+// for `path` into `output` the first time it's expanded. Shared by top-level
+// dependency-graph file links (buildInspectableFileItem) and folder-listing
+// items (buildFolderItemRow) -- a folder-listing item's "path" is just as
+// inspectable as a graph link's "file" (the backend allows both: a known
+// graph link, or anything living inside one that's a folder), so both use
+// the same toggle/fetch/render logic rather than duplicating it.
+function attachInspectToggle(link, output, path) {
     link.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
         const nowHidden = output.classList.toggle("d-none");
         if (nowHidden || output.dataset.loaded) return;
         output.textContent = "Loading...";
-        fetch(`/api/inspect?file=${encodeURIComponent(file)}`)
+        fetch(`/api/inspect?file=${encodeURIComponent(path)}`)
             .then((r) => r.json())
             .then((response) => {
                 if (response.error) {
                     output.textContent = response.error;
+                } else if (response.exists === false) {
+                    output.textContent = "Not found on disk.";
                 } else {
                     renderInspectResult(output, response.data);
                 }
@@ -799,8 +830,6 @@ function buildInspectableFileItem(file) {
                 output.textContent = "Failed to inspect file.";
             });
     });
-
-    return li;
 }
 
 // ---- Rendering inspect results (per "format", see classes/FileInspector.py) --
@@ -1004,15 +1033,23 @@ function buildFolderItemRow(item) {
     const row = document.createElement("div");
     row.className = "map-inspect-symbol mb-1";
 
-    const name = document.createElement("strong");
-    name.textContent = item.name;
-    row.appendChild(name);
+    const link = document.createElement("a");
+    link.href = "#";
+    link.className = "map-file-inspect-link";
+    link.textContent = item.name;
+    row.appendChild(link);
 
     row.appendChild(document.createTextNode(" "));
     const meta = document.createElement("span");
     meta.className = "map-inspect-domains";
     meta.textContent = item.type === "dir" ? "folder" : formatBytes(item.size_bytes);
     row.appendChild(meta);
+
+    const output = document.createElement("div");
+    output.className = "map-file-inspect-output small d-none";
+    row.appendChild(output);
+
+    attachInspectToggle(link, output, item.path);
 
     return row;
 }

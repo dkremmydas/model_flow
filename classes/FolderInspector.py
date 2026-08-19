@@ -35,8 +35,12 @@ class FolderInspector(FileInspector):
             dict: {"format": "folder-listing", "folder_name", "item_count",
             "file_count", "dir_count", "total_size_bytes",
             "extension_counts": {ext: count, ...}, "truncated", "items":
-            [{"name", "type": "file"|"dir", "extension"?, "size_bytes"?}, ...]}.
-            "items" is sorted directories-first, then alphabetically
+            [{"name", "path", "type": "file"|"dir", "extension"?,
+            "size_bytes"?}, ...]}. Each item's "path" is its full path (the
+            web GUI uses it to let the dependency map's inspect panel drill
+            into a listed file or subfolder the same way it inspects a
+            top-level dependency-graph link). "items" is sorted
+            directories-first, then alphabetically
             case-insensitive within each group, and capped at
             `_MAX_ITEMS` entries ("truncated" is True if it was cut off) --
             "item_count"/"file_count"/"dir_count"/"total_size_bytes"/
@@ -67,7 +71,7 @@ class FolderInspector(FileInspector):
         dir_count = len(dirs)
         total_size_bytes = 0
         extension_counts: dict = {}
-        items = [{"name": entry.name, "type": "dir"} for entry in dirs]
+        items = [{"name": entry.name, "path": str(entry), "type": "dir"} for entry in dirs]
 
         for entry in files:
             extension = entry.suffix.lower() or "(none)"
@@ -80,6 +84,7 @@ class FolderInspector(FileInspector):
                 total_size_bytes += size_bytes
             items.append({
                 "name": entry.name,
+                "path": str(entry),
                 "type": "file",
                 "extension": extension,
                 "size_bytes": size_bytes,

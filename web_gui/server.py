@@ -385,12 +385,19 @@ def create_app(config: Config) -> Flask:
         # This is the first route that reads arbitrary file *contents* off
         # disk (every other route only ever send_file's a path resolved from
         # a known task's own config) -- restrict it to files the current
-        # graph actually knows about rather than letting it become a general
-        # arbitrary-file-read endpoint.
+        # graph actually knows about (or, for drilling into a folder link's
+        # own contents, a path living inside one of those known folders)
+        # rather than letting it become a general arbitrary-file-read endpoint.
         graph = _load_graph() or {}
         known_files = {link["file"] for link in graph.get("links", [])}
         if file_path not in known_files:
-            return jsonify({"error": "file is not part of the dependency graph"}), 403
+            resolved_target = Path(file_path).resolve()
+            allowed = any(
+                Path(known).is_dir() and resolved_target.is_relative_to(Path(known).resolve())
+                for known in known_files
+            )
+            if not allowed:
+                return jsonify({"error": "file is not part of the dependency graph"}), 403
 
         resolved = Path(file_path)
         if not resolved.exists():
