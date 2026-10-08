@@ -30,10 +30,11 @@ class Config:
     # Optional, free-text keys prompted for by create_from_user_input() alongside REQUIRED_KEYS,
     # but not enforced by validate_required_keys() -- a config file predating this key must still load.
     OPTIONAL_KEYS = {
+        "Pandoc_dir": "Enter the path to the Pandoc directory (needed for .rmd tasks; optional, press Enter to skip): ",
         "Project_title": "Enter a title for this project (optional, press Enter to skip): ",
     }
 
-
+    OPTIONAL_DIRECTORY_KEYS = ["Pandoc_dir"]  # Optional keys that, when given, must be valid directories
 
     def __init__(self, config_source: str = None):
         """
@@ -182,7 +183,12 @@ class Config:
                 break
 
         for key, prompt in Config.OPTIONAL_KEYS.items():
-            value = input(prompt).strip()
+            while True:
+                value = input(prompt).strip()
+                if value and key in Config.OPTIONAL_DIRECTORY_KEYS and not Path(value).is_dir():
+                    print(f"Warning: '{value}' is not a valid directory. Please try again.")
+                    continue
+                break
             if value:
                 data[key] = value
 

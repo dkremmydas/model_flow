@@ -22,6 +22,8 @@ def test_create_from_user_input_retries_invalid_directory_and_executable_paths(t
         str(tmp_path / "nonexistent.exe"),        # invalid executable -> should warn and retry
         str(rscript),
         str(gams),
+        str(tmp_path / "nonexistent_pandoc"),     # invalid optional directory -> should warn and retry
+        str(good_code_dir),                       # any existing directory stands in for Pandoc here
         "My Project",                              # optional project title
     ])
 
@@ -32,6 +34,7 @@ def test_create_from_user_input_retries_invalid_directory_and_executable_paths(t
     assert config.data["Database_directory"] == str(good_db_dir)
     assert config.data["Rscript_exe"] == str(rscript)
     assert config.data["GAMS_exe"] == str(gams)
+    assert config.data["Pandoc_dir"] == str(good_code_dir)
     assert config.data["Project_title"] == "My Project"
     assert tmp_dir.is_dir()  # auto-created for the DIRECTORY_CREATE key
 
@@ -57,10 +60,12 @@ def test_create_from_user_input_skips_blank_project_title(tmp_path):
         str(tmp_dir),
         str(rscript),
         str(gams),
+        "",  # blank Pandoc_dir -> should be skipped, not stored
         "",  # blank project title -> should be skipped, not stored
     ])
 
     with patch("builtins.input", lambda prompt="": next(inputs)):
         config = Config.create_from_user_input()
 
+    assert "Pandoc_dir" not in config.data
     assert "Project_title" not in config.data
