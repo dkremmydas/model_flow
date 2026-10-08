@@ -18,7 +18,8 @@ directory containing `model_flow.config.json`. Every command below except
 | `show_task`    | Show one task's metadata                              |
 | `run_task`     | Execute one task                                       |
 | `run_pipeline` | Execute a declared pipeline                             |
-| `run_gui`      | Launch the Textual-based GUI                             |
+| `run_gui`      | Launch the Textual-based (terminal) GUI                  |
+| `run_web_gui`  | Launch the browser-based GUI                             |
 
 ## init
 
@@ -39,8 +40,11 @@ field rather than aborting.
 ## build
 
 Recursively scans `Code_directory`, discovers tasks/pipelines/lists, and
-writes `model_flow.db.json`, `model_flow.pipelines.json`, and
-`model_flow.lists.json` into `Database_directory`.
+writes `model_flow.db.json`, `model_flow.pipelines.json`,
+`model_flow.lists.json`, and `model_flow.graph.json` into
+`Database_directory`. The graph links a task that writes a
+`role="output_file"` path to every task that reads the same path as a
+`role="input_file"`; it powers the web GUI's dependency map.
 
 ```bash
 python model_flow.py build --config model_flow.config.json
@@ -92,14 +96,14 @@ python model_flow.py run_task --config model_flow.config.json --module <name> --
   configuration value. **One token** per occurrence, `=`-joined — e.g.
   `--set input_file=data/new_input.csv`, not `--set input_file
   data/new_input.csv`.
-- `--parallel` (optional) — run in parallel mode (used together with
-  `--range`/`--values`)
-- `--range VAR START END STEP` (optional, repeatable) — execute with a
-  numeric range of values, e.g. `--range threshold 0.1 1.0 0.2`
-- `--values VAR V1 V2 ...` (optional, repeatable) — execute with specific
-  values, e.g. `--values method A B C`
+- `--parallel`, `--range VAR START END STEP`, `--values VAR V1 V2 ...` —
+  **accepted but not yet implemented.** These flags are parsed, but
+  `--range`/`--values` are not applied to the run: the task runs once,
+  with its defaults plus any `--set` overrides. To run a task over several
+  values today, declare a List-driven loop in a pipeline instead (see
+  [pipelines.md](pipelines.md)).
 
-Parameter types passed via `--set`/`--range`/`--values` are auto-detected:
+Parameter types passed via `--set` are auto-detected:
 numbers (`1`, `3.14`), booleans (`true`, `false`), and strings (quote if the
 value contains spaces).
 
@@ -133,6 +137,22 @@ python model_flow.py run_gui [--config model_flow.config.json]
 
 - `--config <file>` (optional) — defaults to `config.json` if omitted
 
+## run_web_gui
+
+Starts a local web server for the browser-based GUI (see [gui.md](gui.md));
+open the address it prints (default `http://127.0.0.1:8765`) in a browser.
+
+```bash
+python model_flow.py run_web_gui [--config model_flow.config.json] [--host 127.0.0.1] [--port 8765]
+```
+
+- `--config <file>` (optional) — defaults to `config.json` if omitted
+- `--host <address>` (optional) — interface to bind to; defaults to
+  `127.0.0.1` (this machine only). Binding to `0.0.0.0` exposes the GUI,
+  including the ability to run tasks, to anyone on your network; there is
+  no authentication.
+- `--port <number>` (optional) — defaults to `8765`
+
 ## Examples
 
 ```bash
@@ -151,11 +171,7 @@ model_flow run_task --task 1_import_agri_csv --module d.fadn \
 model_flow run_task --config config.json --module v.main2020/d.policy --task 1_create_policy_data \
   --set year=2023 --set input_file=data/new_data.csv
 
-model_flow run_task --config config.json --module model/training --task train_model \
-  --parallel --range learning_rate 0.001 0.01 0.002
-
-model_flow run_task --config config.json --module model/training --task train_model \
-  --parallel --values optimizer adam sgd --values batch_size 32 64 128
-
 model_flow run_pipeline --config config.json --module v.main2020/d.policy --pipeline run_all
+
+model_flow run_web_gui --config config.json --port 9000
 ```

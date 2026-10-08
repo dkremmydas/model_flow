@@ -75,6 +75,14 @@ Tasks are the executable units; pipelines order tasks within a module. Model-lev
 
 ## Quick start
 
+### 0. Install
+
+```bash
+pip install -r requirements.txt        # or requirements-dev.txt to also get pytest
+```
+
+This pulls in the Textual GUI (`textual`, `rich`), the web GUI (`flask`, `flask-sock`), and `gamsapi`/`gamspy-base` (used only to inspect `.gdx` files in the web GUI's dependency map).
+
 ### 1. Configure Model Flow
 
 ```json
@@ -147,6 +155,7 @@ Annotated source scripts
 model_flow.db.json
 model_flow.pipelines.json
 model_flow.lists.json
+model_flow.graph.json
           ↓
        CLI / GUI
           ↓
@@ -155,7 +164,7 @@ model_flow.lists.json
 
 1. Developers annotate existing scripts with `@MODELFLOW_*` comments.
 2. `model_flow build` scans the code directory and parses those annotations — without executing any script.
-3. It writes machine-readable registries: `model_flow.db.json` (tasks), `model_flow.pipelines.json` (pipelines), `model_flow.lists.json` (lists).
+3. It writes machine-readable registries: `model_flow.db.json` (tasks), `model_flow.pipelines.json` (pipelines), `model_flow.lists.json` (lists), and `model_flow.graph.json` (the task-to-file dependency graph, derived from `role="input_file"`/`role="output_file"` config entries).
 4. The CLI or GUI reads those registries to inspect, configure, and execute tasks and pipelines.
 
 ## Task annotations
@@ -217,7 +226,8 @@ Language-specific syntax and worked examples: [docs/r-tasks.md](docs/r-tasks.md)
 | `show_task`    | Show one task's metadata                        |
 | `run_task`     | Execute one task                                |
 | `run_pipeline` | Execute a declared pipeline                     |
-| `run_gui`      | Launch the Textual-based GUI                    |
+| `run_gui`      | Launch the Textual-based (terminal) GUI         |
+| `run_web_gui`  | Launch the browser-based GUI (`--host`, `--port`, default `127.0.0.1:8765`) |
 
 ```bash
 python model_flow.py run_task --config model_flow.config.json --module data --task prepare_data --set input_file=raw/other.csv
@@ -225,7 +235,16 @@ python model_flow.py run_task --config model_flow.config.json --module data --ta
 
 Full flags (including `--range`, `--values`, `--parallel`, `--output_dir`) are in [docs/cli-reference.md](docs/cli-reference.md).
 
-The GUI (`run_gui`) lets you browse modules/tasks/pipelines, edit parameters, run tasks and pipelines, and reuse previously entered values — see [docs/gui.md](docs/gui.md) for its current capabilities and limitations, and for the VS Code extension that assists with authoring annotations.
+There are two GUIs over the same database and execution engine:
+
+- **Terminal GUI** (`run_gui`, Textual) — browse modules/tasks/pipelines, edit parameters, run tasks and pipelines with live output, and reuse previously entered values.
+- **Web GUI** (`run_web_gui`, Flask, local-only by default) — the same browse/edit/run/rebuild features in the browser, plus:
+  - a nested module tree (modules named with `/` render as an indented hierarchy) and the config's `Project_title` in the header;
+  - links to download a finished run's `role="output_file"` outputs;
+  - an interactive **dependency map** of tasks and the files they read/write (layered layout, per-module colors with a legend and module filter, missing files highlighted);
+  - a **file inspector** on the map, showing the structure of `.gdx` files (symbols), `.rds` files (class, plus columns/dimensions/list elements, via `Rscript`), and folders (drillable listings).
+
+See [docs/gui.md](docs/gui.md) for capabilities and limitations, and for the VS Code extension that assists with authoring annotations.
 
 ## Generated files
 
@@ -237,6 +256,7 @@ The GUI (`run_gui`) lets you browse modules/tasks/pipelines, edit parameters, ru
 | `model_flow.db.json`           | Database directory    | `build`    | Aggregated task registry          |
 | `model_flow.pipelines.json`    | Database directory    | `build`    | Aggregated pipeline registry      |
 | `model_flow.lists.json`        | Database directory    | `build`    | Aggregated list registry          |
+| `model_flow.graph.json`        | Database directory    | `build`    | Task/file dependency graph (web GUI map) |
 | `model_flow.db_user.json`      | Database directory    | GUI        | Remembered per-task parameter history |
 | `model_flow.lists_user.json`   | Database directory    | User/GUI   | User-defined lists                |
 | `model_flow.pipelines_user.json` | Database directory  | User/GUI   | User-authored pipelines           |
@@ -259,9 +279,9 @@ Note that `model_flow.pipelines.json` and `model_flow.lists.json` exist as two d
 
 ## Project status and roadmap
 
-**Implemented**: task discovery and annotation parsing (R, R Markdown, GAMS, batch); module grouping; pipelines with static overrides and List-driven sequential/parallel loops; CLI (`init`, `build`, `list_tasks`, `show_task`, `run_task`, `run_pipeline`, `run_gui`); GUI browsing, parameter editing, task and pipeline execution, per-task value history; VS Code annotation support.
+**Implemented**: task discovery and annotation parsing (R, R Markdown, GAMS, batch); module grouping; pipelines with static overrides and List-driven sequential/parallel loops; CLI (`init`, `build`, `list_tasks`, `show_task`, `run_task`, `run_pipeline`, `run_gui`, `run_web_gui`); terminal and web GUI browsing, parameter editing, task and pipeline execution, per-task value history; web GUI dependency map, output downloads, and GDX/RDS/folder inspection; VS Code annotation support.
 
-**Partially implemented**: the GUI can browse and run existing pipelines, including editing a non-looped task's parameters for one run, but cannot yet author new pipeline definitions or loops — those are still hand-authored as `model_flow.pipelines.json`.
+**Partially implemented**: the CLI parses `--range`/`--values` for `run_task` but does not yet apply them. Both GUIs can browse and run existing pipelines, including editing a non-looped task's parameters for one run, but cannot yet author new pipeline definitions or loops — those are still hand-authored as `model_flow.pipelines.json`.
 
 **Planned**: Workflows (model-level composition of modules) are part of the Workflow-Oriented Modelling methodology but not yet implemented in Model Flow.
 

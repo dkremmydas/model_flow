@@ -1,6 +1,12 @@
 # GUI and editor support
 
-## GUI
+Model Flow has two GUIs, both thin front ends over the same database and
+execution engine as the CLI: a terminal GUI (`run_gui`) and a browser-based
+GUI (`run_web_gui`). They share the same task/pipeline definitions and the
+same per-task value history (`model_flow.db_user.json`), so values used in
+one are offered in the other.
+
+## Terminal GUI
 
 Launch with:
 
@@ -33,6 +39,72 @@ define/edit a loop's own declaration — pipelines and loops are still
 hand-authored as `model_flow.pipelines.json` (see [pipelines.md](pipelines.md)).
 Loop steps render as a read-only summary in the GUI (e.g. "Looped over
 nuts_code=nuts2 (parallel, up to 8 workers)").
+
+## Web GUI
+
+Launch with:
+
+```bash
+python model_flow.py run_web_gui --config model_flow.config.json [--host 127.0.0.1] [--port 8765]
+```
+
+then open `http://127.0.0.1:8765` in a browser. It binds to this machine
+only by default; see [cli-reference.md](cli-reference.md#run_web_gui) before
+changing `--host`, since the server has no authentication. The server is
+`web_gui/server.py` (Flask + WebSocket); the pages are in `web_gui/static/`.
+
+### Main page
+
+- **Browsing** — a searchable module/task/pipeline tree. Modules whose names
+  contain `/` (e.g. `v.main2020/d.policy`) render as a nested, indented
+  hierarchy. The config's `Project_title`, if set, is shown in the header.
+- **Inspecting and editing parameters** — the same as the terminal GUI:
+  editable fields prefilled with defaults, plus a dropdown of previously-used
+  values.
+- **Running tasks and pipelines** — live-streamed output, with a **Kill**
+  button to stop a run. Output streams over a WebSocket that reconnects and
+  catches up if the browser drops the connection (for example after sleep),
+  so a long run's output isn't lost.
+- **Downloading outputs** — after a run, each `role="output_file"` parameter
+  of the tasks that ran is listed with a download link, if the file exists.
+- **Rebuilding the database** — the **Rebuild database** button re-scans
+  `Code_directory`, the same as `build`.
+- Panel sizes, collapsed tree branches, and the last selection are
+  remembered in the browser.
+
+### Dependency map
+
+The **Dependency map** button opens a graph of how tasks connect through
+files. It's built from `model_flow.graph.json` (written by `build`/rebuild):
+a task that writes a path as a `role="output_file"` is linked to every task
+that reads the same path as a `role="input_file"`. Tasks with no file links
+still appear as isolated nodes.
+
+- **Layout** — a layered (dagre) layout, left-to-right or top-to-bottom,
+  with adjustable rank and node spacing under **Settings**.
+- **Modules** — each module has its own color, shown in a legend. Checkboxes
+  show or hide individual modules (**All** / **None** toggle every module),
+  and the selection is remembered in the browser.
+- **Files** — file links whose path doesn't exist yet are highlighted, so
+  you can see which outputs haven't been produced.
+- **File inspector** — clicking a connection lists the files it carries in
+  the detail panel; clicking an existing file's name expands its structure
+  (not its full contents):
+  - `.gdx` — its symbols (sets, parameters, variables, equations, aliases),
+    via `gamsapi`.
+  - `.rds` — the stored object's class; for data frames (including
+    data.table, tibble, sf) its rows and columns, for matrices/arrays their
+    dimensions and element type, and for lists their elements one level
+    deep. This runs `Rscript_exe` from your config.
+  - Folders — a listing you can drill into.
+
+  For safety, the inspector only opens files that appear in the dependency
+  graph (or files inside a folder that does).
+
+### Current limitation
+
+As with the terminal GUI, the web GUI cannot author pipeline definitions or
+loops; loop steps show as a read-only summary.
 
 ## VS Code extension
 
