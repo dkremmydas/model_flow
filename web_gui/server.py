@@ -289,10 +289,20 @@ def create_app(config: Config) -> Flask:
             def on_process_start(process):
                 record.processes.append(process)
 
+            # "key" (ExecutionEngine.execution_key) ties a step's output lines and
+            # its end result back to it, so the page can show per-task status and
+            # output when several run in parallel.
+            def on_step_output(key, line):
+                record.append({"type": "output", "line": line, "key": key})
+
+            def on_step_end(key, returncode):
+                record.append({"type": "step_end", "key": key, "returncode": returncode})
+
             def on_step_start(step_index, total_steps, task_name, iteration_index,
                                total_iterations, iteration_values):
                 record.append({
                     "type": "step",
+                    "key": ExecutionEngine.execution_key(step_index, task_name, iteration_index),
                     "step_index": step_index,
                     "total_steps": total_steps,
                     "task_name": task_name,
@@ -305,6 +315,7 @@ def create_app(config: Config) -> Flask:
                 module, pipeline_name, capture_output=True,
                 on_output=on_output, on_process_start=on_process_start, on_step_start=on_step_start,
                 extra_overrides=extra_overrides or None,
+                on_step_output=on_step_output, on_step_end=on_step_end,
             )
             for task_name, task_overrides in extra_overrides.items():
                 for script_name, value in task_overrides.items():

@@ -162,6 +162,31 @@
     font-size: 0.85rem;
 }
 
+#step-table-wrap {
+    width: 320px;
+    overflow-y: auto;
+    font-size: 0.8rem;
+}
+
+#step-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bs-tertiary-bg);
+}
+
+#step-table tbody tr {
+    cursor: pointer;
+}
+
+#step-table tbody tr.active > td {
+    background: var(--bs-primary-bg-subtle);
+}
+
+#step-table .step-status-running { color: var(--bs-primary); }
+#step-table .step-status-succeeded { color: var(--bs-success); }
+#step-table .step-status-failed { color: var(--bs-danger); font-weight: 600; }
+#step-table .step-status-stopped { color: var(--bs-secondary-color); }
+
 #output-downloads {
     max-height: 35%;
     overflow-y: auto;

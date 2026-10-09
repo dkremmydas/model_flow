@@ -576,7 +576,7 @@ function startRun(fetchPromise, label) {
             }
             currentRunLabel = label;
             currentRunId = body.run_id;
-            document.getElementById("output-log").textContent = "";
+            resetRunLog();
             clearRunOutputs();
             setStatus(`Running ${label}... `);
             setRunningUiState(true);
@@ -619,7 +619,7 @@ document.getElementById("map-btn").addEventListener("click", () => {
 });
 
 document.getElementById("clear-btn").addEventListener("click", () => {
-    document.getElementById("output-log").textContent = "";
+    resetRunLog();
     clearRunOutputs();
     setStatus("Select a task, then press Run.");
     setWsIndicator("idle");
@@ -637,10 +637,94 @@ function setStatus(message) {
     document.getElementById("status-line").textContent = message;
 }
 
-function appendLog(line) {
+// ---- Output log, per-task filtering and the pipeline step table ------------
+// Every line of the current run is kept in `runLines` as {key, line, header},
+// where `key` (ExecutionEngine.execution_key) says which task run produced it
+// -- null for lines not tied to one task. The <pre> shows either everything
+// (task lines prefixed with their task's label) or only one task's lines.
+
+let runLines = [];
+const runSteps = new Map(); // key -> step event data + {status, returncode}
+let logFilter = null; // null = all output, else a step key
+
+function stepLabel(step) {
+    if (!step) return "";
+    if (step.total_iterations > 1) {
+        const values = Object.values(step.iteration_values || {}).join(", ");
+        return `${step.task_name} [${values || step.iteration_index}]`;
+    }
+    return step.task_name;
+}
+
+function formatLogLine(entry) {
+    if (logFilter !== null || entry.key == null || entry.header) return entry.line;
+    return `[${stepLabel(runSteps.get(entry.key))}] ${entry.line}`;
+}
+
+function appendLog(line, key = null, header = false) {
+    const entry = { key, line, header };
+    runLines.push(entry);
+    if (logFilter !== null && key !== logFilter) return;
     const log = document.getElementById("output-log");
-    log.textContent += line + "\n";
+    log.textContent += formatLogLine(entry) + "\n";
     log.scrollTop = log.scrollHeight;
+}
+
+function renderLog() {
+    const visible = logFilter === null ? runLines : runLines.filter((entry) => entry.key === logFilter);
+    const log = document.getElementById("output-log");
+    log.textContent = visible.map((entry) => formatLogLine(entry) + "\n").join("");
+    log.scrollTop = log.scrollHeight;
+}
+
+function setLogFilter(key) {
+    logFilter = key;
+    document.getElementById("log-filter-bar").classList.toggle("d-none", key === null);
+    document.getElementById("log-filter-label").textContent = key === null ? "" : stepLabel(runSteps.get(key));
+    renderLog();
+    renderStepTable();
+}
+
+document.getElementById("log-filter-clear").addEventListener("click", (e) => {
+    e.preventDefault();
+    setLogFilter(null);
+});
+
+function resetRunLog() {
+    runLines = [];
+    runSteps.clear();
+    logFilter = null;
+    document.getElementById("log-filter-bar").classList.add("d-none");
+    document.getElementById("output-log").textContent = "";
+    renderStepTable();
+}
+
+const STEP_STATUS_TEXT = {
+    running: () => "running…",
+    succeeded: () => "succeeded",
+    failed: (step) => (step.returncode == null ? "error" : `failed (${step.returncode})`),
+    stopped: () => "stopped",
+};
+
+function renderStepTable() {
+    const wrap = document.getElementById("step-table-wrap");
+    const tbody = document.querySelector("#step-table tbody");
+    tbody.innerHTML = "";
+    wrap.classList.toggle("d-none", runSteps.size === 0);
+    for (const step of runSteps.values()) {
+        const row = document.createElement("tr");
+        if (step.key === logFilter) row.classList.add("active");
+        const cells = [`${step.step_index}/${step.total_steps}`, stepLabel(step), STEP_STATUS_TEXT[step.status](step)];
+        for (const text of cells) {
+            const td = document.createElement("td");
+            td.textContent = text;
+            row.appendChild(td);
+        }
+        row.lastChild.className = `step-status-${step.status}`;
+        row.title = "Show only this task's output (click again for all output)";
+        row.addEventListener("click", () => setLogFilter(logFilter === step.key ? null : step.key));
+        tbody.appendChild(row);
+    }
 }
 
 // ---- WebSocket connection indicator ----------------------------------------
@@ -746,8 +830,19 @@ function showRunOutputs(runId) {
 
 function handleRunEvent(data) {
     if (data.type === "output") {
-        appendLog(data.line);
+        appendLog(data.line, data.key ?? null);
+    } else if (data.type === "step_end") {
+        const step = runSteps.get(data.key);
+        if (step) {
+            step.status = data.returncode === 0 ? "succeeded" : "failed";
+            step.returncode = data.returncode;
+            renderStepTable();
+        }
     } else if (data.type === "step") {
+        if (data.key) {
+            runSteps.set(data.key, { ...data, status: "running", returncode: null });
+            renderStepTable();
+        }
         const iterDesc =
             data.total_iterations > 1
                 ? ` iteration ${data.iteration_index}/${data.total_iterations} (${Object.entries(
@@ -758,9 +853,14 @@ function handleRunEvent(data) {
                 : "";
         const message = `Running ${currentRunLabel} [${data.step_index}/${data.total_steps}]: ${data.task_name}${iterDesc}...`;
         setStatus(message);
-        appendLog(`=== [${data.step_index}/${data.total_steps}] ${data.task_name}${iterDesc} ===`);
+        appendLog(`=== [${data.step_index}/${data.total_steps}] ${data.task_name}${iterDesc} ===`, data.key ?? null, true);
     } else if (data.type === "done") {
         runTerminal = true;
+        // Anything never reported as finished (e.g. a task raised) is no longer running.
+        for (const step of runSteps.values()) {
+            if (step.status === "running") step.status = "stopped";
+        }
+        renderStepTable();
         setRunningUiState(false);
         setWsIndicator("idle");
         const status = data.returncode === 0 ? "succeeded" : `failed (exit code ${data.returncode})`;

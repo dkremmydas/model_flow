@@ -874,7 +874,7 @@ def test_kill_terminates_every_process_of_a_parallel_group(tmp_path, monkeypatch
                 starting_lines = 0
                 while starting_lines < 2:
                     message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-                    if message == {"type": "output", "line": "starting"}:
+                    if message["type"] == "output" and message["line"] == "starting":
                         starting_lines += 1
 
                 assert client.post("/api/kill").status_code == 200
@@ -889,3 +889,29 @@ def test_kill_terminates_every_process_of_a_parallel_group(tmp_path, monkeypatch
     assert done == {"type": "done", "returncode": 1}
     assert len(started) == 2
     assert all(process.returncode == 1 for process in started)  # both terminated, not just the last
+
+
+def test_pipeline_run_events_tie_output_and_results_to_each_task(tmp_path, monkeypatch):
+    """Each task run in a pipeline gets a key (on its "step" event); its output
+    lines carry that key, and a "step_end" event reports its exit code -- what
+    the page's per-task status table and output filter are built from."""
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", _FakePopenMultiLine)
+    write_db_with_parallel_group_pipeline(tmp_path)
+    app = create_app(make_config(tmp_path))
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post("/api/run_pipeline", json={"module": "test_module", "pipeline": "grouped"})
+        run_id = resp.get_json()["run_id"]
+        events = asyncio.run(_collect_ws_events(f"{server.base_url}/ws/run/{run_id}?from=0"))
+
+    steps = {e["task_name"]: e["key"] for e in events if e["type"] == "step"}
+    assert steps == {"1_task": "1/1_task/1", "2_task": "2/2_task/1", "3_task": "2/3_task/1"}
+
+    for key in steps.values():
+        assert [e["line"] for e in events if e["type"] == "output" and e.get("key") == key] == [
+            "line1", "line2", "line3",
+        ]
+    ends = {e["key"]: e["returncode"] for e in events if e["type"] == "step_end"}
+    assert ends == {key: 0 for key in steps.values()}
+    assert events[-1] == {"type": "done", "returncode": 0}

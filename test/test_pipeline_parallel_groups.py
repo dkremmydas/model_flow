@@ -297,3 +297,56 @@ def test_stale_bare_string_steps_still_run_alongside_groups(engine, install):
 
     assert engine.execute_pipeline("test_module", "run_all") == 0
     assert [c[0] for c in fake.calls] == ["first", "a"]
+
+
+def test_step_output_and_step_end_are_keyed_per_execution(engine, install):
+    def fake(engine_self, module, task_name, output_dir=None, overrides=None, on_output=None, **kwargs):
+        on_output(f"hello from {task_name}")
+        return 4 if task_name == "b" else 0
+
+    install(fake)
+    set_pipeline(engine, [group(plain("a"), plain("b"))])
+    outputs, ends = [], []
+    lock = threading.Lock()
+
+    def on_step_output(key, line):
+        with lock:
+            outputs.append((key, line))
+
+    def on_step_end(key, returncode):
+        with lock:
+            ends.append((key, returncode))
+
+    result = engine.execute_pipeline("test_module", "run_all",
+                                     on_step_output=on_step_output, on_step_end=on_step_end)
+
+    assert result == 4
+    assert sorted(outputs) == [("1/a/1", "hello from a"), ("1/b/1", "hello from b")]
+    assert sorted(ends) == [("1/a/1", 0), ("1/b/1", 4)]
+
+
+def test_parallel_loop_reports_step_start_only_when_iteration_starts(engine, install):
+    # With 1 worker, iteration 2 must not be reported as started while
+    # iteration 1 is still running (it used to be reported at submit time).
+    events = []
+    lock = threading.Lock()
+
+    def fake(engine_self, module, task_name, output_dir=None, overrides=None, **kwargs):
+        with lock:
+            events.append(("run", overrides["nuts_code"]))
+        time.sleep(0.02)
+        return 0
+
+    install(fake)
+    engine.lists.lists_data = {"nuts2": {"name": "nuts2", "elements": ["AT11", "AT12"]}}
+    set_pipeline(engine, [{"task": "a", "overrides": {},
+                           "loop": {"parameters": {"nuts_code": "nuts2"}, "combine": None,
+                                    "mode": "parallel", "max_workers": 1}}])
+
+    def on_step_start(step_index, total_steps, task_name, iteration_index, total_iterations, values):
+        with lock:
+            events.append(("start", values["nuts_code"]))
+
+    engine.execute_pipeline("test_module", "run_all", on_step_start=on_step_start)
+
+    assert events == [("start", "AT11"), ("run", "AT11"), ("start", "AT12"), ("run", "AT12")]

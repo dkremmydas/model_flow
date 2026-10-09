@@ -134,7 +134,9 @@ class ExecutionEngine:
                           on_output: Optional[Callable[[str], None]] = None,
                           on_process_start: Optional[Callable[[subprocess.Popen], None]] = None,
                           on_step_start: Optional[Callable[[int, int, str, int, int, Dict[str, str]], None]] = None,
-                          extra_overrides: Optional[Dict[str, Dict[str, str]]] = None) -> int:
+                          extra_overrides: Optional[Dict[str, Dict[str, str]]] = None,
+                          on_step_output: Optional[Callable[[str, str], None]] = None,
+                          on_step_end: Optional[Callable[[str, Optional[int]], None]] = None) -> int:
         """
         Execute every task declared in a pipeline (Database.get_pipeline), in
         order, stopping at the first failure. Each pipeline task entry is
@@ -184,8 +186,15 @@ class ExecutionEngine:
         total_iterations, iteration_values)` is called once before each
         individual execution (once for a non-looped task, once per iteration for
         a looped one) so a caller (e.g. the GUI) can render live progress.
-        Members of a parallel group share their group's step_index, and their
-        on_step_start calls come from worker threads.
+        Members of a parallel group share their group's step_index; for parallel
+        groups and parallel loops, on_step_start is called from the worker thread
+        as each execution actually starts (not when it's queued).
+
+        To tell executions apart (e.g. when several run in parallel), a caller
+        can pass `on_step_output(key, line)` -- used *instead of* on_output for
+        task output -- and `on_step_end(key, returncode)` (returncode None if the
+        execution raised). `key` is execution_key(step_index, task_name,
+        iteration_index), so it can be computed from on_step_start's arguments.
         `capture_output`/`on_output`/`on_process_start` are forwarded to every
         underlying execute_task call exactly as they are for a single task; note
         that a parallel loop step calls `on_output`/`on_process_start` from
@@ -221,6 +230,7 @@ class ExecutionEngine:
             final_output_dir=final_output_dir, extra_overrides=extra_overrides,
             capture_output=capture_output, on_output=on_output,
             on_process_start=on_process_start, on_step_start=on_step_start,
+            on_step_output=on_step_output, on_step_end=on_step_end,
         )
 
         for step_index, raw_entry in enumerate(tasks, start=1):
@@ -257,9 +267,20 @@ class ExecutionEngine:
         self.logger.info(f"Pipeline '{module}/{pipeline_name}' completed successfully ({total_steps} steps).")
         return 0
 
+    @staticmethod
+    def execution_key(step_index: int, task_name: str, iteration_index: int) -> str:
+        """
+        Stable id for one task execution within a pipeline run (one per
+        non-looped task, one per loop iteration), e.g. "2/3_NVZ/1". Passed to
+        on_step_output/on_step_end, and derivable from on_step_start's own
+        arguments, so a caller can tie output lines and results to a step.
+        """
+        return f"{step_index}/{task_name}/{iteration_index}"
+
     def _run_pipeline_entry(self, entry: dict, step_index: int, *, module: str, pipeline_name: str,
                             total_steps: int, final_output_dir, extra_overrides: dict,
-                            capture_output: bool, on_output, on_process_start, on_step_start) -> int:
+                            capture_output: bool, on_output, on_process_start, on_step_start,
+                            on_step_output=None, on_step_end=None) -> int:
         """
         Run one normalized {"task", "overrides", "loop"} pipeline entry (once, or
         once per loop iteration) and return 0 or its first non-zero return code.
@@ -269,14 +290,29 @@ class ExecutionEngine:
         base_overrides = {**(entry.get("overrides") or {}), **extra_overrides.get(task_name, {})}
         loop = entry.get("loop")
 
-        if loop is None:
+        def run_one(iter_index, total_iterations, iteration_values, output_dir, overrides) -> int:
+            # on_step_start fires here, i.e. when the execution actually starts --
+            # for a parallel loop that's on the worker thread, not at submit time,
+            # so a queued iteration isn't reported as running.
             if on_step_start:
-                on_step_start(step_index, total_steps, task_name, 1, 1, {})
-            result = self.execute_task(
-                module, task_name, final_output_dir, overrides=base_overrides or None,
-                capture_output=capture_output, on_output=on_output, on_process_start=on_process_start,
-            )
-            returncode = result.returncode if isinstance(result, ExecutionResult) else result
+                on_step_start(step_index, total_steps, task_name, iter_index, total_iterations, iteration_values)
+            key = self.execution_key(step_index, task_name, iter_index)
+            task_output = (lambda line: on_step_output(key, line)) if on_step_output else on_output
+            returncode = None
+            try:
+                result = self.execute_task(
+                    module, task_name, output_dir, overrides=overrides,
+                    capture_output=capture_output, on_output=task_output, on_process_start=on_process_start,
+                )
+                returncode = result.returncode if isinstance(result, ExecutionResult) else result
+                return returncode
+            finally:
+                # None if execute_task raised.
+                if on_step_end:
+                    on_step_end(key, returncode)
+
+        if loop is None:
+            returncode = run_one(1, 1, {}, final_output_dir, base_overrides or None)
             if returncode != 0:
                 self.logger.error(
                     f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
@@ -288,30 +324,21 @@ class ExecutionEngine:
         iterations = Parser.expand_loop(loop, self.lists.get_elements)
         total_iterations = len(iterations)
 
+        def iteration_args(iter_index, iteration_values):
+            output_dir = self._pipeline_iteration_output_dir(final_output_dir, task_name, iteration_values)
+            return (iter_index, total_iterations, iteration_values, str(output_dir),
+                    {**base_overrides, **iteration_values})
+
         if loop.get("mode") == "parallel":
             max_workers = self._parallel_worker_count(loop, total_iterations)
-            first_failure = None
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = []
-                for iter_index, iteration_values in enumerate(iterations, start=1):
-                    if on_step_start:
-                        on_step_start(step_index, total_steps, task_name, iter_index,
-                                      total_iterations, iteration_values)
-                    merged_overrides = {**base_overrides, **iteration_values}
-                    iter_output_dir = self._pipeline_iteration_output_dir(
-                        final_output_dir, task_name, iteration_values
-                    )
-                    futures.append(executor.submit(
-                        self.execute_task, module, task_name, str(iter_output_dir),
-                        overrides=merged_overrides, capture_output=capture_output,
-                        on_output=on_output, on_process_start=on_process_start,
-                    ))
-                for future in futures:
-                    result = future.result()
-                    returncode = result.returncode if isinstance(result, ExecutionResult) else result
-                    if returncode != 0 and first_failure is None:
-                        first_failure = returncode
+                futures = [
+                    executor.submit(run_one, *iteration_args(iter_index, iteration_values))
+                    for iter_index, iteration_values in enumerate(iterations, start=1)
+                ]
+                returncodes = [future.result() for future in futures]
 
+            first_failure = next((code for code in returncodes if code != 0), None)
             if first_failure is not None:
                 self.logger.error(
                     f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
@@ -323,15 +350,7 @@ class ExecutionEngine:
 
         # mode "sequential" (default)
         for iter_index, iteration_values in enumerate(iterations, start=1):
-            if on_step_start:
-                on_step_start(step_index, total_steps, task_name, iter_index, total_iterations, iteration_values)
-            merged_overrides = {**base_overrides, **iteration_values}
-            iter_output_dir = self._pipeline_iteration_output_dir(final_output_dir, task_name, iteration_values)
-            result = self.execute_task(
-                module, task_name, str(iter_output_dir), overrides=merged_overrides,
-                capture_output=capture_output, on_output=on_output, on_process_start=on_process_start,
-            )
-            returncode = result.returncode if isinstance(result, ExecutionResult) else result
+            returncode = run_one(*iteration_args(iter_index, iteration_values))
             if returncode != 0:
                 self.logger.error(
                     f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "

@@ -56,9 +56,23 @@
         <button id="kill-btn" class="btn btn-outline-danger btn-sm" disabled>Kill</button>
       </div>
     </div>
-    <div id="output-body" class="d-flex flex-column overflow-hidden">
-      <pre id="output-log" class="bg-dark text-light p-2 rounded mb-0 flex-grow-1"></pre>
-      <div id="output-downloads" class="d-none"></div>
+    <div id="output-body" class="d-flex gap-2 overflow-hidden">
+      <!-- Pipeline runs only: one row per task run with its status; click a row
+           to show just that task's output. -->
+      <div id="step-table-wrap" class="d-none flex-shrink-0">
+        <table id="step-table" class="table table-sm table-hover mb-0">
+          <thead><tr><th>Step</th><th>Task</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="d-flex flex-column flex-grow-1 overflow-hidden" style="min-width: 0">
+        <div id="log-filter-bar" class="d-none small mb-1">
+          Showing output of <strong id="log-filter-label"></strong>
+          <a href="#" id="log-filter-clear" class="ms-2">Show all output</a>
+        </div>
+        <pre id="output-log" class="bg-dark text-light p-2 rounded mb-0 flex-grow-1"></pre>
+        <div id="output-downloads" class="d-none"></div>
+      </div>
     </div>
   </div>
 
