@@ -156,6 +156,16 @@ class ShowTask(Widget):
         text-style: bold;
         padding-top: 1;
     }
+
+    .pipeline-group-header {
+        text-style: italic;
+        color: $text-muted;
+        padding-top: 1;
+    }
+
+    .pipeline-task-header.in-parallel-group {
+        padding-left: 2;
+    }
     """
 
     def __init__(self, modelflowapp: "ModelFlowApp") -> None:
@@ -278,18 +288,24 @@ class ShowTask(Widget):
         database = self.modelflowapp.database
 
         sections = []
-        for raw_entry in pipeline.get("tasks", []):
-            # Defensive: a model_flow.pipelines.json built by a pre-loop-feature
-            # version of model_flow still has plain task-name-string entries --
-            # treat those the same as a normalized no-overrides/no-loop entry
-            # (mirrors ExecutionEngine.execute_pipeline's own fallback).
-            entry = raw_entry if isinstance(raw_entry, dict) else {"task": raw_entry, "overrides": {}, "loop": None}
+        steps = pipeline.get("tasks", [])
+        current_group = None
+        # iter_pipeline_entries flattens parallel groups and normalizes bare
+        # task-name strings from a stale pre-loop model_flow.pipelines.json.
+        for entry, group in Parser.iter_pipeline_entries(steps):
+            if group and group != current_group:
+                workers = steps[group - 1].get("max_workers")
+                label = f"Step {group}: run in parallel" + (f" (up to {workers} workers)" if workers else "")
+                sections.append(Static(label, classes="pipeline-group-header"))
+            current_group = group
+
             task_name = entry["task"]
             task = database.get_task(module, task_name) if database else None
             if not task:
                 continue
 
-            sections.append(Static(task_name, classes="pipeline-task-header"))
+            header_classes = "pipeline-task-header" + (" in-parallel-group" if group else "")
+            sections.append(Static(task_name, classes=header_classes))
 
             loop = entry.get("loop")
             if loop:

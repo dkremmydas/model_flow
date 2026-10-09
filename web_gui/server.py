@@ -47,7 +47,9 @@ class RunRecord:
     events: List[dict] = field(default_factory=list)
     condition: threading.Condition = field(default_factory=threading.Condition)
     done: bool = False
-    process: Optional[object] = None  # subprocess.Popen, set via on_process_start
+    # Every subprocess.Popen started by this run (via on_process_start) -- a list,
+    # since a parallel loop or parallel pipeline group runs several at once.
+    processes: List[object] = field(default_factory=list)
     # [{"module", "task", "overrides"}] for each task that actually ran in this
     # run -- one entry for a single task run, one per non-looped pipeline step
     # for a pipeline run. Populated at run start, used by /api/run/<id>/outputs
@@ -202,8 +204,12 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "pipeline not found"}), 404
 
         tasks = []
-        for raw_entry in pipeline.get("tasks", []):
-            entry = raw_entry if isinstance(raw_entry, dict) else {"task": raw_entry, "overrides": {}, "loop": None}
+        group_workers = {
+            step_index: step.get("max_workers")
+            for step_index, step in enumerate(pipeline.get("tasks", []), start=1)
+            if isinstance(step, dict) and "parallel" in step
+        }
+        for entry, group in Parser.iter_pipeline_entries(pipeline.get("tasks", [])):
             task_name = entry["task"]
             task = database.get_task(module, task_name)
             loop = entry.get("loop")
@@ -212,6 +218,10 @@ def create_app(config: Config) -> Flask:
                 "overrides": entry.get("overrides") or {},
                 "loop": loop,
                 "loop_summary": _describe_loop(loop) if loop else None,
+                # Step number of the parallel group this task belongs to (None if
+                # it's an ordinary step), so the page can show which tasks run together.
+                "parallel_group": group,
+                "parallel_group_workers": group_workers.get(group) if group else None,
                 "config": task.get("config", []) if task else [],
                 "history": database.get_user_values(module, task_name) if task else {},
             })
@@ -234,7 +244,7 @@ def create_app(config: Config) -> Flask:
                 record.append({"type": "output", "line": line})
 
             def on_process_start(process):
-                record.process = process
+                record.processes.append(process)
 
             result = engine.execute_task(
                 module, task_name, overrides=overrides or None, capture_output=True,
@@ -265,8 +275,7 @@ def create_app(config: Config) -> Flask:
             # output path may vary per iteration and isn't tracked per-iteration here.
             pipeline = database.get_pipeline(module, pipeline_name) or {}
             outputs_info = []
-            for raw_entry in pipeline.get("tasks", []):
-                entry = raw_entry if isinstance(raw_entry, dict) else {"task": raw_entry, "overrides": {}, "loop": None}
+            for entry, _group in Parser.iter_pipeline_entries(pipeline.get("tasks", [])):
                 if entry.get("loop"):
                     continue
                 step_task_name = entry["task"]
@@ -278,7 +287,7 @@ def create_app(config: Config) -> Flask:
                 record.append({"type": "output", "line": line})
 
             def on_process_start(process):
-                record.process = process
+                record.processes.append(process)
 
             def on_step_start(step_index, total_steps, task_name, iteration_index,
                                total_iterations, iteration_values):
@@ -356,9 +365,11 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/kill", methods=["POST"])
     def api_kill():
         record = run_state.get_active()
-        if not record or record.process is None or record.process.poll() is not None:
+        live = [process for process in record.processes if process.poll() is None] if record else []
+        if not live:
             return jsonify({"error": "no running task to kill"}), 409
-        record.process.terminate()
+        for process in live:
+            process.terminate()
         return jsonify({"ok": True})
 
     def _load_graph():

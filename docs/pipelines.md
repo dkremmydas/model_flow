@@ -1,9 +1,11 @@
 # Pipelines
 
-A Pipeline is an ordered sequence of tasks within a single module, run one
-after another via `run_pipeline` (or the GUI). Execution is sequential and
-stops immediately at the first task — or, for a looped task, the first
-failing iteration/step — that fails; later tasks are not run.
+A Pipeline is an ordered sequence of steps within a single module, run one
+after another via `run_pipeline` (or the GUI). A step is a task, or a
+[parallel group](#parallel-groups) of tasks that run at the same time.
+Execution stops at the first step that fails — for a looped task, the first
+failing iteration; for a parallel group, once its tasks have finished and any
+of them failed — and later steps are not run.
 
 ## Declaring a pipeline
 
@@ -52,6 +54,8 @@ module's task scripts):
       real parameter names (`script_name`) declared in that task's own
       `@MODELFLOW_config` annotations.
     - `loop` (optional) — see below.
+  - a **parallel group** `{parallel, max_workers?}` — see
+    [Parallel groups](#parallel-groups).
 
 Every referenced `task` must belong to that pipeline's own module — a
 pipeline cannot span modules.
@@ -79,8 +83,59 @@ more named [Lists](lists.md) instead of just once:
   regardless of any single failure; the step — and pipeline — is judged
   failed afterward if any iteration failed).
 - `max_workers` — optional positive integer cap on concurrent iterations for
-  `"parallel"` mode; defaults to `min(iteration_count, cpu_count)` if
+  `"parallel"` mode; defaults to the config's `Max_workers` (see below), else
+  `cpu_count`, always capped at the iteration count, if
   omitted.
+
+## Parallel groups
+
+Steps run one after another. To run several tasks at the same time, wrap them
+in a parallel group; the group as a whole is one step:
+
+```json
+"tasks": [
+  "00_initialization",
+  {
+    "parallel": [
+      "1_import_agri_csv",
+      "1_import_prices",
+      { "task": "1_import_land", "overrides": { "year": "2023" } }
+    ],
+    "max_workers": 3
+  },
+  "2_filtered_load"
+]
+```
+
+This runs `00_initialization`, then the three imports together, then
+`2_filtered_load` once all three have finished.
+
+- `parallel` (required) — a non-empty list of steps, each written exactly like
+  an ordinary step (a task name, or `{task, overrides?, loop?}`). Groups can't
+  be nested, and a task can appear only once per group.
+- `max_workers` (optional) — positive integer cap on how many of the group's
+  tasks run at once; defaults to the config's `Max_workers` (see below), else
+  the CPU core count, always capped at the number of tasks in the group.
+
+If a task in the group fails, the others still run to completion; the
+pipeline then stops (same rule as a parallel loop). A looped task inside a
+group runs its own iterations as its `loop` says, so a parallel loop inside a
+parallel group uses workers from both limits at once.
+
+Only put tasks in one group if they don't depend on each other's outputs — the
+order they start and finish in is not defined.
+
+### Default worker count (`Max_workers` in the config)
+
+`model_flow.config.json` can set an optional `Max_workers`, used by every
+parallel loop and parallel group that doesn't declare its own `max_workers`:
+
+- a whole number (e.g. `6`) — that many workers;
+- a fraction between 0 and 1 (e.g. `0.5`) — that share of the machine's CPU
+  cores, rounded down, at least 1.
+
+Left out, parallel loops and groups use all CPU cores. An invalid value is ignored with a
+warning.
 
 A loop step's iterations each run against their own output subdirectory
 (`output_dir/<task_name>/<param>=<value>__...`) so repeated runs of the same
@@ -98,7 +153,9 @@ that makes sense:
 - A missing/duplicate pipeline `name`, an empty/malformed `tasks` list, or
   *any* problem with a single task entry (unknown task, unknown/overlapping
   override or loop-parameter key, unknown list, mismatched `"zip"` list
-  lengths, invalid `combine`/`mode`) skips that **whole pipeline entry** —
+  lengths, invalid `combine`/`mode`; for a parallel group, an empty or nested
+  group, a task listed twice in it, or an invalid `max_workers`) skips that
+  **whole pipeline entry** —
   the same coarse granularity an unknown plain task name always had.
 - Duplicate pipeline names for the same module are rejected across the
   *entire* `Code_directory` walk, not just within one file, since multiple

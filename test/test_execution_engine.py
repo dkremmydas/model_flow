@@ -498,3 +498,38 @@ def test_execute_pipeline_parallel_loop_respects_max_workers(engine, monkeypatch
 
     assert result == 0
     assert current["max_seen"] <= 2
+
+
+def make_engine_with_max_workers(tmp_path, max_workers):
+    (tmp_path / "model_flow.db.json").write_text("{}", encoding="utf-8")
+    config_data = json.loads(json.dumps(make_config(tmp_path).data))
+    if max_workers is not None:
+        config_data["Max_workers"] = max_workers
+    return ExecutionEngine(Config(json.dumps(config_data)))
+
+
+@pytest.mark.parametrize(
+    "max_workers, expected",
+    [
+        (None, 16),  # not set -> all cores
+        (3, 3),      # whole number -> that many workers
+        (0.5, 8),    # fraction -> share of cores
+        (0.01, 1),   # tiny fraction -> at least 1
+        (2.5, 16),   # invalid -> all cores
+        (-1, 16),    # invalid -> all cores
+        ("x", 16),   # invalid -> all cores
+    ],
+)
+def test_parallel_worker_count_uses_config_max_workers(tmp_path, monkeypatch, max_workers, expected):
+    monkeypatch.setattr(execution_engine_module.os, "cpu_count", lambda: 16)
+    engine = make_engine_with_max_workers(tmp_path, max_workers)
+
+    assert engine._parallel_worker_count({}, 100) == expected
+
+
+def test_parallel_worker_count_prefers_loop_max_workers_and_caps_at_iterations(tmp_path, monkeypatch):
+    monkeypatch.setattr(execution_engine_module.os, "cpu_count", lambda: 16)
+    engine = make_engine_with_max_workers(tmp_path, 0.5)
+
+    assert engine._parallel_worker_count({"max_workers": 2}, 100) == 2  # loop's own value wins
+    assert engine._parallel_worker_count({}, 3) == 3                    # never more than iterations

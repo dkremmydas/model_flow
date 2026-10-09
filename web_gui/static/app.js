@@ -485,9 +485,22 @@ function selectPipeline(module, pipelineName) {
             const form = document.getElementById("detail-form");
             form.innerHTML = "";
 
+            let currentGroup = null;
             for (const taskEntry of data.tasks) {
+                // Tasks in the same parallel group get one shared heading and
+                // are indented under it.
+                if (taskEntry.parallel_group && taskEntry.parallel_group !== currentGroup) {
+                    const groupHeader = document.createElement("div");
+                    groupHeader.className = "pipeline-group-header";
+                    const workers = taskEntry.parallel_group_workers;
+                    groupHeader.textContent =
+                        `Step ${taskEntry.parallel_group}: run in parallel` + (workers ? ` (up to ${workers} workers)` : "");
+                    form.appendChild(groupHeader);
+                }
+                currentGroup = taskEntry.parallel_group || null;
+
                 const header = document.createElement("div");
-                header.className = "pipeline-task-header";
+                header.className = "pipeline-task-header" + (taskEntry.parallel_group ? " in-parallel-group" : "");
                 header.textContent = taskEntry.task_name;
                 form.appendChild(header);
 

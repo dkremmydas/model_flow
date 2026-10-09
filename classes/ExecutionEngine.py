@@ -163,8 +163,9 @@ class ExecutionEngine:
               whole pipeline at the first non-zero return code (true
               stop-on-first-failure, matching a non-looped task's behavior).
             - mode "parallel": all iterations are submitted to a
-              ThreadPoolExecutor (max_workers = loop["max_workers"] or
-              min(iteration_count, os.cpu_count() or 4)) and all are allowed to
+              ThreadPoolExecutor (max_workers = loop["max_workers"], else the
+              config's Max_workers, else os.cpu_count() -- see
+              _parallel_worker_count) and all are allowed to
               finish before the step is judged -- a sibling iteration's failure
               does not cancel already-launched iterations. If any iteration
               failed, the step (and pipeline) is failed, returning the first
@@ -172,10 +173,19 @@ class ExecutionEngine:
               a deliberate tradeoff (simpler than mid-flight cancellation), not
               an oversight.
 
+        A step can also be a parallel group, normalized to {"parallel": [entry,
+        ...], "max_workers"}: its member entries (each handled exactly as above,
+        loops included) run concurrently via _run_pipeline_entry, all are
+        allowed to finish, and the group fails with the first non-zero code in
+        declared order -- same semantics as a parallel loop. Worker count follows
+        _parallel_worker_count (group "max_workers", else config, else cores).
+
         `on_step_start(step_index, total_steps, task_name, iteration_index,
         total_iterations, iteration_values)` is called once before each
         individual execution (once for a non-looped task, once per iteration for
         a looped one) so a caller (e.g. the GUI) can render live progress.
+        Members of a parallel group share their group's step_index, and their
+        on_step_start calls come from worker threads.
         `capture_output`/`on_output`/`on_process_start` are forwarded to every
         underlying execute_task call exactly as they are for a single task; note
         that a parallel loop step calls `on_output`/`on_process_start` from
@@ -206,89 +216,130 @@ class ExecutionEngine:
         extra_overrides = extra_overrides or {}
         self.logger.info(f"Starting pipeline '{module}/{pipeline_name}' ({total_steps} steps)")
 
+        run_args = dict(
+            module=module, pipeline_name=pipeline_name, total_steps=total_steps,
+            final_output_dir=final_output_dir, extra_overrides=extra_overrides,
+            capture_output=capture_output, on_output=on_output,
+            on_process_start=on_process_start, on_step_start=on_step_start,
+        )
+
         for step_index, raw_entry in enumerate(tasks, start=1):
-            # Defensive: a model_flow.pipelines.json built by a pre-loop-feature
-            # version of model_flow still has plain task-name-string entries --
-            # treat those the same as a normalized no-overrides/no-loop entry
-            # instead of crashing, so a stale (not yet rebuilt) db file degrades
-            # gracefully rather than with a confusing TypeError.
-            entry = raw_entry if isinstance(raw_entry, dict) else {"task": raw_entry, "overrides": {}, "loop": None}
-            task_name = entry["task"]
-            base_overrides = {**(entry.get("overrides") or {}), **extra_overrides.get(task_name, {})}
-            loop = entry.get("loop")
-
-            if loop is None:
-                if on_step_start:
-                    on_step_start(step_index, total_steps, task_name, 1, 1, {})
-                result = self.execute_task(
-                    module, task_name, final_output_dir, overrides=base_overrides or None,
-                    capture_output=capture_output, on_output=on_output, on_process_start=on_process_start,
-                )
-                returncode = result.returncode if isinstance(result, ExecutionResult) else result
-                if returncode != 0:
-                    self.logger.error(
-                        f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
-                        f"(step {step_index}/{total_steps}) exited {returncode}."
-                    )
-                    return returncode
-                continue
-
-            iterations = Parser.expand_loop(loop, self.lists.get_elements)
-            total_iterations = len(iterations)
-
-            if loop.get("mode") == "parallel":
-                max_workers = loop.get("max_workers") or min(total_iterations, os.cpu_count() or 4)
-                first_failure = None
+            if isinstance(raw_entry, dict) and "parallel" in raw_entry:
+                # Parallel group: every member runs concurrently and all are
+                # allowed to finish (same tradeoff as a parallel loop); the step
+                # fails afterwards with the first non-zero code in declared order.
+                members = [Parser._as_task_entry(m) for m in raw_entry.get("parallel") or []]
+                max_workers = self._parallel_worker_count(raw_entry, len(members))
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = []
-                    for iter_index, iteration_values in enumerate(iterations, start=1):
-                        if on_step_start:
-                            on_step_start(step_index, total_steps, task_name, iter_index,
-                                          total_iterations, iteration_values)
-                        merged_overrides = {**base_overrides, **iteration_values}
-                        iter_output_dir = self._pipeline_iteration_output_dir(
-                            final_output_dir, task_name, iteration_values
-                        )
-                        futures.append(executor.submit(
-                            self.execute_task, module, task_name, str(iter_output_dir),
-                            overrides=merged_overrides, capture_output=capture_output,
-                            on_output=on_output, on_process_start=on_process_start,
-                        ))
-                    for future in futures:
-                        result = future.result()
-                        returncode = result.returncode if isinstance(result, ExecutionResult) else result
-                        if returncode != 0 and first_failure is None:
-                            first_failure = returncode
-
+                    futures = [
+                        executor.submit(self._run_pipeline_entry, member, step_index, **run_args)
+                        for member in members
+                    ]
+                    returncodes = [future.result() for future in futures]
+                first_failure = next((code for code in returncodes if code != 0), None)
                 if first_failure is not None:
+                    failed = [m["task"] for m, code in zip(members, returncodes) if code != 0]
                     self.logger.error(
-                        f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
-                        f"(step {step_index}/{total_steps}, parallel loop) had a failing iteration "
-                        f"(exit {first_failure})."
+                        f"Pipeline '{module}/{pipeline_name}' stopped: parallel group "
+                        f"(step {step_index}/{total_steps}) had failing task(s) {failed} (exit {first_failure})."
                     )
                     return first_failure
                 continue
 
-            # mode "sequential" (default)
-            for iter_index, iteration_values in enumerate(iterations, start=1):
-                if on_step_start:
-                    on_step_start(step_index, total_steps, task_name, iter_index, total_iterations, iteration_values)
-                merged_overrides = {**base_overrides, **iteration_values}
-                iter_output_dir = self._pipeline_iteration_output_dir(final_output_dir, task_name, iteration_values)
-                result = self.execute_task(
-                    module, task_name, str(iter_output_dir), overrides=merged_overrides,
-                    capture_output=capture_output, on_output=on_output, on_process_start=on_process_start,
-                )
-                returncode = result.returncode if isinstance(result, ExecutionResult) else result
-                if returncode != 0:
-                    self.logger.error(
-                        f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
-                        f"(step {step_index}/{total_steps}, iteration {iter_index}/{total_iterations}) "
-                        f"exited {returncode}."
-                    )
-                    return returncode
+            # Defensive: a model_flow.pipelines.json built by a pre-loop-feature
+            # version of model_flow still has plain task-name-string entries --
+            # treated the same as a normalized no-overrides/no-loop entry instead
+            # of crashing, so a stale (not yet rebuilt) db file degrades gracefully.
+            returncode = self._run_pipeline_entry(Parser._as_task_entry(raw_entry), step_index, **run_args)
+            if returncode != 0:
+                return returncode
 
         self.logger.info(f"Pipeline '{module}/{pipeline_name}' completed successfully ({total_steps} steps).")
+        return 0
+
+    def _run_pipeline_entry(self, entry: dict, step_index: int, *, module: str, pipeline_name: str,
+                            total_steps: int, final_output_dir, extra_overrides: dict,
+                            capture_output: bool, on_output, on_process_start, on_step_start) -> int:
+        """
+        Run one normalized {"task", "overrides", "loop"} pipeline entry (once, or
+        once per loop iteration) and return 0 or its first non-zero return code.
+        Used for ordinary steps and for each member of a parallel group.
+        """
+        task_name = entry["task"]
+        base_overrides = {**(entry.get("overrides") or {}), **extra_overrides.get(task_name, {})}
+        loop = entry.get("loop")
+
+        if loop is None:
+            if on_step_start:
+                on_step_start(step_index, total_steps, task_name, 1, 1, {})
+            result = self.execute_task(
+                module, task_name, final_output_dir, overrides=base_overrides or None,
+                capture_output=capture_output, on_output=on_output, on_process_start=on_process_start,
+            )
+            returncode = result.returncode if isinstance(result, ExecutionResult) else result
+            if returncode != 0:
+                self.logger.error(
+                    f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
+                    f"(step {step_index}/{total_steps}) exited {returncode}."
+                )
+                return returncode
+            return 0
+
+        iterations = Parser.expand_loop(loop, self.lists.get_elements)
+        total_iterations = len(iterations)
+
+        if loop.get("mode") == "parallel":
+            max_workers = self._parallel_worker_count(loop, total_iterations)
+            first_failure = None
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for iter_index, iteration_values in enumerate(iterations, start=1):
+                    if on_step_start:
+                        on_step_start(step_index, total_steps, task_name, iter_index,
+                                      total_iterations, iteration_values)
+                    merged_overrides = {**base_overrides, **iteration_values}
+                    iter_output_dir = self._pipeline_iteration_output_dir(
+                        final_output_dir, task_name, iteration_values
+                    )
+                    futures.append(executor.submit(
+                        self.execute_task, module, task_name, str(iter_output_dir),
+                        overrides=merged_overrides, capture_output=capture_output,
+                        on_output=on_output, on_process_start=on_process_start,
+                    ))
+                for future in futures:
+                    result = future.result()
+                    returncode = result.returncode if isinstance(result, ExecutionResult) else result
+                    if returncode != 0 and first_failure is None:
+                        first_failure = returncode
+
+            if first_failure is not None:
+                self.logger.error(
+                    f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
+                    f"(step {step_index}/{total_steps}, parallel loop) had a failing iteration "
+                    f"(exit {first_failure})."
+                )
+                return first_failure
+            return 0
+
+        # mode "sequential" (default)
+        for iter_index, iteration_values in enumerate(iterations, start=1):
+            if on_step_start:
+                on_step_start(step_index, total_steps, task_name, iter_index, total_iterations, iteration_values)
+            merged_overrides = {**base_overrides, **iteration_values}
+            iter_output_dir = self._pipeline_iteration_output_dir(final_output_dir, task_name, iteration_values)
+            result = self.execute_task(
+                module, task_name, str(iter_output_dir), overrides=merged_overrides,
+                capture_output=capture_output, on_output=on_output, on_process_start=on_process_start,
+            )
+            returncode = result.returncode if isinstance(result, ExecutionResult) else result
+            if returncode != 0:
+                self.logger.error(
+                    f"Pipeline '{module}/{pipeline_name}' stopped: task '{task_name}' "
+                    f"(step {step_index}/{total_steps}, iteration {iter_index}/{total_iterations}) "
+                    f"exited {returncode}."
+                )
+                return returncode
+
         return 0
 
     @staticmethod
@@ -311,6 +362,34 @@ class ExecutionEngine:
         iter_dir = Path(base_output_dir) / task_name / label
         iter_dir.mkdir(parents=True, exist_ok=True)
         return iter_dir
+
+    def _parallel_worker_count(self, loop: dict, iteration_count: int) -> int:
+        """
+        Number of workers for a parallel loop or parallel group (`loop` is that
+        loop/group dict). Precedence: its own "max_workers", then the config's optional "Max_workers", then all CPU
+        cores. Max_workers may be a whole number (>= 1, an absolute worker count)
+        or a fraction in (0, 1) (a share of the CPU cores, rounded down, at least
+        1). An invalid Max_workers logs a warning and falls back to all cores.
+        Always capped at iteration_count (iterations or group members), since
+        extra workers would sit idle.
+        """
+        cores = os.cpu_count() or 4
+        workers = loop.get("max_workers")
+        if not workers:
+            setting = self.config.get("Max_workers")
+            if setting is None or setting == "":
+                workers = cores
+            elif isinstance(setting, bool) or not isinstance(setting, (int, float)) or setting <= 0:
+                self.logger.warning(f"Ignoring invalid Max_workers {setting!r}; using all {cores} CPU cores")
+                workers = cores
+            elif setting < 1:
+                workers = max(1, int(cores * setting))
+            elif float(setting).is_integer():
+                workers = int(setting)
+            else:
+                self.logger.warning(f"Ignoring invalid Max_workers {setting!r}; using all {cores} CPU cores")
+                workers = cores
+        return max(1, min(workers, iteration_count))
 
     def _config_path(self, key: str) -> Path:
         """

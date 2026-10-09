@@ -231,12 +231,36 @@ class Parser:
         return pipelines
 
     @staticmethod
+    def iter_pipeline_entries(tasks: List):
+        """
+        Yield (entry, group) for every task entry of a pipeline's normalized
+        "tasks" list, in order, with parallel groups flattened: `group` is None
+        for an ordinary step, or the 1-based step number of the parallel group
+        the entry belongs to. Bare task-name strings (from a stale, pre-loop
+        model_flow.pipelines.json) are normalized to {"task", "overrides": {},
+        "loop": None}. For consumers that only need "every task in the pipeline"
+        (GUIs, output tracking) without caring how steps are scheduled.
+        """
+        for step_index, raw_entry in enumerate(tasks, start=1):
+            if isinstance(raw_entry, dict) and "parallel" in raw_entry:
+                for member in raw_entry.get("parallel") or []:
+                    yield Parser._as_task_entry(member), step_index
+            else:
+                yield Parser._as_task_entry(raw_entry), None
+
+    @staticmethod
+    def _as_task_entry(raw_entry) -> Dict:
+        return raw_entry if isinstance(raw_entry, dict) else {"task": raw_entry, "overrides": {}, "loop": None}
+
+    @staticmethod
     def _normalize_pipeline_tasks(tasks: List, known_tasks: Dict[str, Dict],
                                    lists: Dict[str, Dict]) -> Tuple[Optional[List[Dict]], Optional[str]]:
         """
         Validate and normalize one pipeline's "tasks" list. Every entry -- whether
         authored as a plain task-name string or an object with "task"/"overrides"/
-        "loop" -- becomes {"task", "overrides", "loop"}. Returns (normalized, None)
+        "loop" -- becomes {"task", "overrides", "loop"}; a parallel group
+        {"parallel": [...], "max_workers"?} becomes {"parallel": [normalized
+        entries], "max_workers"}. Returns (normalized, None)
         on success, or (None, error_message) on the first problem found -- the
         caller skips the *whole* pipeline on any error, matching the existing rule
         that a single unknown task name already invalidates the entire pipeline
@@ -245,6 +269,31 @@ class Parser:
         normalized = []
 
         for item in tasks:
+            # A parallel group: {"parallel": [step, ...], "max_workers"?}. Its
+            # members are ordinary steps (validated by recursing on just them),
+            # run concurrently; the group as a whole is one step in the sequence.
+            if isinstance(item, dict) and "parallel" in item:
+                members = item.get("parallel")
+                if not isinstance(members, list) or not members:
+                    return None, f"'parallel' must be a non-empty list of steps: {item!r}"
+                if any(isinstance(m, dict) and "parallel" in m for m in members):
+                    return None, "parallel groups cannot be nested"
+                normalized_members, error = Parser._normalize_pipeline_tasks(members, known_tasks, lists)
+                if error:
+                    return None, error
+                member_names = [m["task"] for m in normalized_members]
+                duplicates = sorted({n for n in member_names if member_names.count(n) > 1})
+                if duplicates:
+                    # Would share one output folder and one set of GUI overrides.
+                    return None, f"task(s) {duplicates} listed more than once in the same parallel group"
+                max_workers = item.get("max_workers")
+                if max_workers is not None and (
+                    not isinstance(max_workers, int) or isinstance(max_workers, bool) or max_workers < 1
+                ):
+                    return None, f"parallel group 'max_workers' must be a positive integer: {item!r}"
+                normalized.append({"parallel": normalized_members, "max_workers": max_workers})
+                continue
+
             if isinstance(item, str):
                 task_name, overrides, loop = item, {}, None
             elif isinstance(item, dict):

@@ -803,3 +803,89 @@ def test_run_task_returns_409_while_another_run_is_active(tmp_path, monkeypatch)
 
     kill_resp = client.post("/api/kill")
     assert kill_resp.status_code == 200
+
+
+def write_db_with_parallel_group_pipeline(tmp_path):
+    """Three tasks; pipeline "grouped" runs 1_task, then 2_task and 3_task in a
+    parallel group capped at 2 workers."""
+    def task(name):
+        return {
+            "module": "test_module",
+            "file": f"{name}.R",
+            "file_path": f"C:\scripts\{name}.R",
+            "filetype": ".r",
+            "name": name,
+            "description": "",
+            "config": [{"name": "ext_par", "role": "parameter", "script_name": "ext_par", "script_value": "5"}],
+        }
+
+    db_content = {"test_module": [task("1_task"), task("2_task"), task("3_task")]}
+    (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+    plain = lambda name: {"task": name, "overrides": {}, "loop": None}
+    pipelines_content = {"test_module": [{
+        "name": "grouped",
+        "description": "",
+        "tasks": [plain("1_task"), {"parallel": [plain("2_task"), plain("3_task")], "max_workers": 2}],
+    }]}
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
+
+
+def test_api_pipeline_marks_parallel_group_members(tmp_path):
+    write_db_with_parallel_group_pipeline(tmp_path)
+    client = create_app(make_config(tmp_path)).test_client()
+
+    resp = client.get("/api/pipeline/test_module/grouped")
+    assert resp.status_code == 200
+    tasks = resp.get_json()["tasks"]
+
+    assert [(t["task_name"], t["parallel_group"], t["parallel_group_workers"]) for t in tasks] == [
+        ("1_task", None, None),
+        ("2_task", 2, 2),
+        ("3_task", 2, 2),
+    ]
+
+
+def test_kill_terminates_every_process_of_a_parallel_group(tmp_path, monkeypatch):
+    started = []
+
+    class _TrackedBlockingPopen(_FakePopenBlockingUntilTerminated):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            started.append(self)
+
+    monkeypatch.setattr(execution_engine_module.subprocess, "Popen", _TrackedBlockingPopen)
+    write_db_with_parallel_group_pipeline(tmp_path)
+    # Pipeline with only the parallel group, so both processes are live at once.
+    pipelines = json.loads((tmp_path / "model_flow.pipelines.json").read_text(encoding="utf-8"))
+    pipelines["test_module"][0]["tasks"] = pipelines["test_module"][0]["tasks"][1:]
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines), encoding="utf-8")
+    app = create_app(make_config(tmp_path))
+
+    with _LiveServer(app) as server:
+        client = app.test_client()
+        resp = client.post("/api/run_pipeline", json={"module": "test_module", "pipeline": "grouped"})
+        run_id = resp.get_json()["run_id"]
+
+        async def scenario():
+            import websockets
+
+            async with websockets.connect(f"{server.base_url}/ws/run/{run_id}?from=0") as ws:
+                # Wait until both group members have printed their first line.
+                starting_lines = 0
+                while starting_lines < 2:
+                    message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                    if message == {"type": "output", "line": "starting"}:
+                        starting_lines += 1
+
+                assert client.post("/api/kill").status_code == 200
+
+                while True:
+                    message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                    if message["type"] == "done":
+                        return message
+
+        done = asyncio.run(scenario())
+
+    assert done == {"type": "done", "returncode": 1}
+    assert len(started) == 2
+    assert all(process.returncode == 1 for process in started)  # both terminated, not just the last
