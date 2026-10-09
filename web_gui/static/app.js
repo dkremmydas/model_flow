@@ -706,6 +706,18 @@ const STEP_STATUS_TEXT = {
     stopped: () => "stopped",
 };
 
+const MAX_RUNNING_NAMES = 3;
+
+function updateRunningStatus() {
+    const running = [...runSteps.values()].filter((step) => step.status === "running");
+    if (!running.length) return;
+    const steps = [...new Set(running.map((step) => `${step.step_index}/${step.total_steps}`))].join(", ");
+    const names = running.slice(0, MAX_RUNNING_NAMES).map(stepLabel);
+    if (running.length > MAX_RUNNING_NAMES) names.push(`+${running.length - MAX_RUNNING_NAMES} more`);
+    const what = running.length > 1 ? `${running.length} tasks running` : "running";
+    setStatus(`${currentRunLabel} — step ${steps}, ${what}: ${names.join(", ")}`);
+}
+
 function renderStepTable() {
     const wrap = document.getElementById("step-table-wrap");
     const tbody = document.querySelector("#step-table tbody");
@@ -837,6 +849,7 @@ function handleRunEvent(data) {
             step.status = data.returncode === 0 ? "succeeded" : "failed";
             step.returncode = data.returncode;
             renderStepTable();
+            updateRunningStatus();
         }
     } else if (data.type === "step") {
         if (data.key) {
@@ -851,8 +864,7 @@ function handleRunEvent(data) {
                       .map(([k, v]) => `${k}=${v}`)
                       .join(", ")})`
                 : "";
-        const message = `Running ${currentRunLabel} [${data.step_index}/${data.total_steps}]: ${data.task_name}${iterDesc}...`;
-        setStatus(message);
+        updateRunningStatus();
         appendLog(`=== [${data.step_index}/${data.total_steps}] ${data.task_name}${iterDesc} ===`, data.key ?? null, true);
     } else if (data.type === "done") {
         runTerminal = true;
