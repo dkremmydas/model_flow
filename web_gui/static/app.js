@@ -394,7 +394,18 @@ function showDetail() {
     document.getElementById("detail-content").classList.remove("d-none");
 }
 
-function paramRow(labelText, inputId, value, historyValues) {
+// Hover notes for a role="input_file" parameter's server-side "file_status"
+// (see web_gui/server.py's _file_status); "exists" gets no mark.
+const FILE_STATUS_NOTES = {
+    missing: "This input file does not exist",
+    no_access: "No permission to access this input file",
+};
+
+// fileStatus: the server's "file_status" for a role="input_file" parameter --
+// "missing"/"no_access" are shown red with a hover note. Only the checked
+// value has that status, so the mark is dropped while the input holds
+// anything else (an edit or a history pick).
+function paramRow(labelText, inputId, value, historyValues, fileStatus = null, resolvedPath = "") {
     const row = document.createElement("div");
     row.className = "param-row";
 
@@ -409,6 +420,18 @@ function paramRow(labelText, inputId, value, historyValues) {
     input.id = inputId;
     input.value = value;
     row.appendChild(input);
+
+    if (FILE_STATUS_NOTES[fileStatus]) {
+        const updateMissing = () => {
+            const missing = input.value === value;
+            row.classList.toggle("missing-file", missing);
+            const note = missing ? FILE_STATUS_NOTES[fileStatus] + (resolvedPath ? `:\n${resolvedPath}` : "") : "";
+            label.title = note;
+            input.title = note;
+        };
+        input.addEventListener("input", updateMissing);
+        updateMissing();
+    }
 
     if (historyValues && historyValues.length) {
         const select = document.createElement("select");
@@ -427,6 +450,7 @@ function paramRow(labelText, inputId, value, historyValues) {
         select.addEventListener("change", () => {
             if (select.value !== "") {
                 input.value = select.value;
+                input.dispatchEvent(new Event("input"));
             }
         });
         row.appendChild(select);
@@ -435,9 +459,32 @@ function paramRow(labelText, inputId, value, historyValues) {
     return row;
 }
 
-function selectTask(module, taskName) {
-    fetch(`/api/task/${encodeURIComponent(module)}/${encodeURIComponent(taskName)}`)
+// Detail requests can be slow (input-file existence checks on network
+// drives), so the panel is dimmed while one is pending, and only the most
+// recently requested task/pipeline may render -- otherwise a slow earlier
+// response could land after, and overwrite, a later click.
+let detailRequestSeq = 0;
+
+function fetchDetail(url) {
+    const requestId = ++detailRequestSeq;
+    const content = document.getElementById("detail-content");
+    content.classList.add("detail-loading");
+    const isCurrent = () => requestId === detailRequestSeq;
+    return fetch(url)
         .then((r) => r.json())
+        .then((data) => {
+            if (!isCurrent()) return new Promise(() => {}); // superseded -- never render
+            content.classList.remove("detail-loading");
+            return data;
+        })
+        .catch((error) => {
+            if (isCurrent()) content.classList.remove("detail-loading");
+            throw error;
+        });
+}
+
+function selectTask(module, taskName) {
+    fetchDetail(`/api/task/${encodeURIComponent(module)}/${encodeURIComponent(taskName)}`)
         .then((data) => {
             selection = { kind: "task", module, name: taskName };
             taskDefaults = {};
@@ -459,7 +506,7 @@ function selectTask(module, taskName) {
                 taskDefaults[param.script_name] = value;
                 const inputId = `input-${sanitizeId(param.script_name)}`;
                 const history = (data.history || {})[param.script_name];
-                form.appendChild(paramRow(`${param.script_name} (${param.role || "parameter"})`, inputId, value, history));
+                form.appendChild(paramRow(`${param.script_name} (${param.role || "parameter"})`, inputId, value, history, param.file_status, param.resolved_path));
             }
 
             document.getElementById("run-btn").onclick = () => runTask(module, taskName);
@@ -467,8 +514,7 @@ function selectTask(module, taskName) {
 }
 
 function selectPipeline(module, pipelineName) {
-    fetch(`/api/pipeline/${encodeURIComponent(module)}/${encodeURIComponent(pipelineName)}`)
-        .then((r) => r.json())
+    fetchDetail(`/api/pipeline/${encodeURIComponent(module)}/${encodeURIComponent(pipelineName)}`)
         .then((data) => {
             selection = { kind: "pipeline", module, name: pipelineName };
             taskDefaults = {};
@@ -526,7 +572,7 @@ function selectPipeline(module, pipelineName) {
                     });
                     const history = (taskEntry.history || {})[param.script_name];
                     form.appendChild(
-                        paramRow(`${param.script_name} (${param.role || "parameter"})`, inputId, defaultValue, history)
+                        paramRow(`${param.script_name} (${param.role || "parameter"})`, inputId, defaultValue, history, param.file_status, param.resolved_path)
                     );
                 }
             }
@@ -572,6 +618,15 @@ function startRun(fetchPromise, label) {
         .then(({ ok, body }) => {
             if (!ok) {
                 setStatus(body.error || "Failed to start run");
+                if (body.missing_inputs) {
+                    // Refused before starting (server-side input-file check) --
+                    // list the files in the log as well as in an error dialog.
+                    resetRunLog();
+                    clearRunOutputs();
+                    appendLog(`ERROR: ${label} was not run -- input files are missing or inaccessible:`, null, true);
+                    for (const line of body.missing_inputs) appendLog(`  ${line}`);
+                    alert(`${label} was not run.\n\nInput files missing or inaccessible:\n\n${body.missing_inputs.join("\n")}`);
+                }
                 return;
             }
             currentRunLabel = label;
@@ -831,7 +886,7 @@ function showRunOutputs(runId) {
                     } else {
                         link.href = "#";
                         link.classList.add("text-muted", "disabled");
-                        link.textContent = `${file.script_name}: ${file.value} (not found on disk)`;
+                        link.textContent = `${file.script_name}: ${file.value} (${file.no_access ? "no permission to access" : "not found on disk"})`;
                     }
                     container.appendChild(link);
                 }

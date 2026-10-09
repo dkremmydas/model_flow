@@ -151,8 +151,31 @@ def list_tasks(config: Config, module_filter: Optional[str] = None) -> None:
         raise
     
     
+class MissingInputFilesError(RuntimeError):
+    """A run was refused because some role="input_file" files are missing or
+    inaccessible (see ExecutionEngine.check_input_files)."""
+
+
+def check_input_files_or_raise(problems: list, what: str, ignore_missing_inputs: bool) -> None:
+    """Log every input-file problem; refuse the run (raise) unless
+    ignore_missing_inputs, in which case they're only logged as warnings."""
+    if not problems:
+        return
+    listing = "".join(f"\n  {line}" for line in ExecutionEngine.describe_input_file_problems(problems))
+    if ignore_missing_inputs:
+        logger.warning(f"Running {what} despite {len(problems)} missing/inaccessible input file(s) "
+                       f"(--ignore-missing-inputs):{listing}")
+        return
+    logger.error(f"{len(problems)} input file(s) missing or inaccessible:{listing}")
+    raise MissingInputFilesError(
+        f"{what} was not run because input files are missing or inaccessible. "
+        f"Use --ignore-missing-inputs to run anyway."
+    )
+
+
 def run_task(config: Config, module: str, task_name: str, parallel: bool = False, 
-                     output_dir: Optional[str] = None, parameters: Optional[dict] = None) -> int:
+                     output_dir: Optional[str] = None, parameters: Optional[dict] = None,
+                     ignore_missing_inputs: bool = False) -> int:
     """
     Execute a specific task by finding it in the database and running it
     
@@ -163,6 +186,8 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
         parallel: Whether to run in parallel mode
         output_dir: Optional directory for output files (defaults to Temporary_directory from config)
         parameters: Optional dict of parameters to override task config (format: {param_name: value})
+        ignore_missing_inputs: Run even if some role="input_file" files are missing/inaccessible
+            (otherwise the task is not run and MissingInputFilesError is raised)
         
     Returns:
         Exit code from task execution
@@ -176,6 +201,10 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
                
         # Create execution engine with Config instance
         engine = ExecutionEngine(config)
+        check_input_files_or_raise(
+            engine.check_input_files(module, task_name, parameters),
+            f"Task '{module}/{task_name}'", ignore_missing_inputs,
+        )
 
         # Determine output directory (command line arg > config > default)
         final_output_dir = output_dir or config.get("Temporary_directory")
@@ -190,12 +219,15 @@ def run_task(config: Config, module: str, task_name: str, parallel: bool = False
         
         logger.info(f"Task '{module}/{task_name}' completed with exit code: {result}")
         return result
-        
+
+    except MissingInputFilesError:
+        raise
     except Exception as e:
         logger.error(f"Failed to execute task '{module}/{task_name}': {str(e)}")
         raise RuntimeError(f"Task execution failed: {str(e)}") from e
 
-def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Optional[str] = None) -> int:
+def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Optional[str] = None,
+                 ignore_missing_inputs: bool = False) -> int:
     """
     Execute every task in a pipeline, in declared order, via
     ExecutionEngine.execute_pipeline. Stops immediately at the first task (or,
@@ -210,6 +242,9 @@ def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Op
         pipeline_name: Name of the pipeline to execute
         output_dir: Optional directory for output files (defaults to Temporary_directory from config),
             applied uniformly to every task in the pipeline
+        ignore_missing_inputs: Run even if some role="input_file" files are missing/inaccessible
+            (otherwise nothing is run and MissingInputFilesError is raised). Inputs written by an
+            earlier step of the pipeline aren't checked (see ExecutionEngine.check_pipeline_input_files).
 
     Returns:
         0 if every task succeeded; otherwise the non-zero exit code of the first
@@ -221,6 +256,10 @@ def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Op
     """
     try:
         engine = ExecutionEngine(config)
+        check_input_files_or_raise(
+            engine.check_pipeline_input_files(module, pipeline_name),
+            f"Pipeline '{module}/{pipeline_name}'", ignore_missing_inputs,
+        )
         result = engine.execute_pipeline(module, pipeline_name, output_dir)
 
         if result == 0:
@@ -230,7 +269,7 @@ def run_pipeline(config: Config, module: str, pipeline_name: str, output_dir: Op
 
         return result
 
-    except ValueError:
+    except (ValueError, MissingInputFilesError):
         raise
     except Exception as e:
         logger.error(f"Failed to execute pipeline '{module}/{pipeline_name}': {str(e)}")
@@ -412,6 +451,12 @@ def main():
         type=str,
         help='Directory where log/output files will be saved (defaults to Temporary_directory from config)'
     )
+    run_task_parser.add_argument(
+        '--ignore-missing-inputs',
+        action='store_true',
+        help='Run even if some input files (role="input_file") are missing or inaccessible; '
+             'by default nothing is run in that case'
+    )
 
     
     # Run pipeline command
@@ -439,6 +484,12 @@ def main():
         '--output_dir',
         type=str,
         help='Directory where log/output files will be saved (defaults to Temporary_directory from config)'
+    )
+    run_pipeline_parser.add_argument(
+        '--ignore-missing-inputs',
+        action='store_true',
+        help='Run even if some input files (role="input_file") are missing or inaccessible; '
+             'by default nothing is run in that case'
     )
     
     # Add show_task command parser
@@ -485,6 +536,13 @@ def main():
         default=8765,
         help='Port to bind the web GUI server to'
     )
+    web_gui_parser.add_argument(
+        '--build',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Rebuild the database from Code_directory before starting the server '
+             '(default: on; pass --no-build to start from the existing database as-is)'
+    )
 
     args = parser.parse_args()
 
@@ -501,10 +559,10 @@ def main():
         print("   Usage: python model_flow.py list_tasks --config=<config_file> [--module=<module_name>]")
         
         print("\n4. run_task - Execute a single task")
-        print("   Usage: python model_flow.py run_task --config=<config_file> --module=<module> --task=<task> [--parallel]")
+        print("   Usage: python model_flow.py run_task --config=<config_file> --module=<module> --task=<task> [--parallel] [--ignore-missing-inputs]")
         
         print("\n5. run_pipeline - Execute a pipeline")
-        print("   Usage: python model_flow.py run_pipeline --config=<config_file> --module=<module> --pipeline=<pipeline> [--output_dir <dir>]")
+        print("   Usage: python model_flow.py run_pipeline --config=<config_file> --module=<module> --pipeline=<pipeline> [--output_dir <dir>] [--ignore-missing-inputs]")
         
         print("\n6. show_task - Display detailed task information")
         print("   Usage: python model_flow.py show_task --config=<config_file> --module=<module> --task=<task>")
@@ -513,7 +571,7 @@ def main():
         print("   Usage: python model_flow.py run_gui [--config=<config_file>]")
 
         print("\n8. run_web_gui - Launch the browser-based GUI")
-        print("   Usage: python model_flow.py run_web_gui [--config=<config_file>] [--host=<host>] [--port=<port>]")
+        print("   Usage: python model_flow.py run_web_gui [--config=<config_file>] [--host=<host>] [--port=<port>] [--no-build]")
 
         print("\n9. help - Show this help message")
         print("   Usage: python model_flow.py --help")
@@ -548,10 +606,12 @@ def main():
                 args.task,
                 args.parallel,
                 args.output_dir,
-                parameters=params  # Pass the --set parameters here
+                parameters=params,  # Pass the --set parameters here
+                ignore_missing_inputs=args.ignore_missing_inputs,
             )
         elif args.command == 'run_pipeline':
-            result = run_pipeline(config, args.module, args.pipeline, args.output_dir)
+            result = run_pipeline(config, args.module, args.pipeline, args.output_dir,
+                                  ignore_missing_inputs=args.ignore_missing_inputs)
             if result != 0:
                 sys.exit(result)
         elif args.command == 'list_tasks':
@@ -566,6 +626,13 @@ def main():
             # users who never touch the web GUI (unlike ModelFlowApp's top-of-file
             # import, which makes `textual` a hard dependency of this whole module).
             from web_gui.server import create_app
+            if args.build:
+                # A failed build isn't fatal here -- the server can still start
+                # from whatever database a previous build left behind.
+                try:
+                    build(config)
+                except Exception:
+                    logger.warning("Startup rebuild failed; starting with the existing database.")
             web_app = create_app(config)
             web_app.run(host=args.host, port=args.port, threaded=True)
         else:

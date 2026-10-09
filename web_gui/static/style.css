@@ -107,6 +107,23 @@
     width: 30%;
 }
 
+/* role="input_file" parameter whose file doesn't exist on disk (app.js paramRow). */
+.param-row.missing-file .param-label {
+    color: var(--bs-danger);
+    cursor: help;
+}
+
+.param-row.missing-file .param-input {
+    color: var(--bs-danger);
+    border-color: var(--bs-danger);
+}
+
+/* Same, in the dependency map's task detail panel (map.js showTaskDetail). */
+.map-missing-file {
+    color: var(--bs-danger);
+    cursor: help;
+}
+
 .pipeline-task-header {
     font-weight: 600;
     margin-top: 1rem;
@@ -427,4 +444,34 @@ body.map-resizing {
 
 .map-setting .form-range {
     height: 1rem;
+}
+
+/* Full-page overlay with a centered spinner, shown by loading.js while a
+   request is pending -- catches clicks so the page waits until it finishes. */
+#loading-indicator {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(var(--bs-body-bg-rgb), 0.4);
+    cursor: progress;
+}
+
+#loading-indicator .spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+/* Set by loading.js while a request has been pending for a moment. */
+body.page-loading {
+    cursor: progress;
+}
+
+/* Detail panel while a newer task/pipeline's details are loading (app.js fetchDetail). */
+#detail-content.detail-loading {
+    opacity: 0.5;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in 0.25s;
 }

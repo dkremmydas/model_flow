@@ -11,6 +11,7 @@ shutdown) and drive it with the `websockets` package.
 """
 import asyncio
 import json
+import pathlib
 import threading
 import time
 
@@ -715,7 +716,7 @@ def test_rebuild_writes_graph_json_and_api_graph_serves_it(tmp_path):
         assert graph["links"] == [{
             "from_module": "module_a", "from_task": "make_data",
             "to_module": "module_b", "to_task": "use_data",
-            "file": output_path, "extension": ".csv", "exists": False,
+            "file": output_path, "extension": ".csv", "exists": False, "no_access": False,
         }]
 
 
@@ -915,3 +916,149 @@ def test_pipeline_run_events_tie_output_and_results_to_each_task(tmp_path, monke
     ends = {e["key"]: e["returncode"] for e in events if e["type"] == "step_end"}
     assert ends == {key: 0 for key in steps.values()}
     assert events[-1] == {"type": "done", "returncode": 0}
+
+
+# ---------------------------------------------------------------------------
+# role="input_file" existence flag on /api/task and /api/pipeline
+# ---------------------------------------------------------------------------
+
+def write_db_with_input_file_task(tmp_path, input_value):
+    db_content = {
+        "test_module": [
+            {
+                "module": "test_module",
+                "file": "script.R",
+                "file_path": "C:\scripts\test_script.R",
+                "filetype": ".r",
+                "name": "1_test_task",
+                "description": "A test task.",
+                "config": [
+                    {"name": "ext_par", "role": "parameter", "script_name": "ext_par", "script_value": "5"},
+                    {"name": "input_file", "role": "input_file", "script_name": "input_file",
+                     "script_value": input_value},
+                ],
+            }
+        ]
+    }
+    (tmp_path / "model_flow.db.json").write_text(json.dumps(db_content), encoding="utf-8")
+
+
+@pytest.mark.parametrize("create_file", [True, False])
+def test_api_task_flags_input_file_existence(tmp_path, create_file):
+    write_db_with_input_file_task(tmp_path, "data/in.csv")
+    if create_file:
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "in.csv").write_text("x", encoding="utf-8")
+    client = create_app(make_config(tmp_path)).test_client()
+
+    config = client.get("/api/task/test_module/1_test_task").get_json()["task"]["config"]
+    assert "file_status" not in config[0]  # plain parameters are left alone
+    assert config[1]["file_status"] == ("exists" if create_file else "missing")
+    # Relative value resolved against Database_directory (tmp_path here).
+    assert config[1]["resolved_path"] == str(tmp_path / "data" / "in.csv")
+
+
+def test_api_pipeline_checks_input_file_against_override(tmp_path):
+    write_db_with_input_file_task(tmp_path, "missing.csv")
+    (tmp_path / "present.csv").write_text("x", encoding="utf-8")
+    pipelines_content = {
+        "test_module": [
+            {"name": "run", "tasks": [
+                {"task": "1_test_task", "overrides": {"input_file": "present.csv"}, "loop": None},
+            ]}
+        ]
+    }
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
+    client = create_app(make_config(tmp_path)).test_client()
+
+    config = client.get("/api/pipeline/test_module/run").get_json()["tasks"][0]["config"]
+    assert config[1]["file_status"] == "exists"
+    # The cached task itself isn't mutated by the flag.
+    task_config = client.get("/api/task/test_module/1_test_task").get_json()["task"]["config"]
+    assert task_config[1]["file_status"] == "missing"
+
+
+def deny_access_to(monkeypatch, denied_path):
+    """Make Path.exists() raise the way it does for a restricted network
+    share (WinError 5) -- for this one path only."""
+    real_exists = pathlib.Path.exists
+
+    def fake_exists(self, *args, **kwargs):
+        if str(self) == str(denied_path):
+            raise PermissionError(13, "Access is denied", str(self))
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "exists", fake_exists)
+
+
+def test_api_task_and_pipeline_flag_inaccessible_input_file(tmp_path, monkeypatch):
+    write_db_with_input_file_task(tmp_path, "locked.csv")
+    pipelines_content = {"test_module": [{"name": "run", "tasks": [
+        {"task": "1_test_task", "overrides": {}, "loop": None},
+    ]}]}
+    (tmp_path / "model_flow.pipelines.json").write_text(json.dumps(pipelines_content), encoding="utf-8")
+    client = create_app(make_config(tmp_path)).test_client()
+    deny_access_to(monkeypatch, tmp_path / "locked.csv")
+
+    resp = client.get("/api/task/test_module/1_test_task")
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["config"][1]["file_status"] == "no_access"
+    resp = client.get("/api/pipeline/test_module/run")
+    assert resp.status_code == 200
+    assert resp.get_json()["tasks"][0]["config"][1]["file_status"] == "no_access"
+
+
+def test_api_graph_and_inspect_handle_inaccessible_file(tmp_path, monkeypatch):
+    write_db_with_one_task(tmp_path)
+    locked = tmp_path / "locked.csv"
+    write_graph(tmp_path, [{"from_module": "a", "from_task": "t1", "to_module": "b", "to_task": "t2",
+                            "file": str(locked), "extension": ".csv"}])
+    client = create_app(make_config(tmp_path)).test_client()
+    deny_access_to(monkeypatch, locked)
+
+    link = client.get("/api/graph").get_json()["links"][0]
+    assert link["exists"] is True  # not known to be missing, so not drawn as "not created yet"
+    assert link["no_access"] is True
+    resp = client.get(f"/api/inspect?file={locked}")
+    assert resp.status_code == 403
+    assert "permission" in resp.get_json()["error"].lower()
+
+
+def test_file_checks_run_in_parallel_and_report_unknown_past_deadline(tmp_path, monkeypatch):
+    """Slow network-drive checks run concurrently, and one that hangs past
+    FILE_CHECK_DEADLINE_S is reported as "unknown" instead of blocking."""
+    from classes import FileStatus as file_status_module
+
+    write_db_with_one_task(tmp_path)
+    slow = [tmp_path / f"slow_{i}.csv" for i in range(5)]
+    hung = tmp_path / "hung.csv"
+    write_graph(tmp_path, [
+        {"from_module": "a", "from_task": "t1", "to_module": "b", "to_task": "t2", "file": str(p), "extension": ".csv"}
+        for p in slow + [hung]
+    ])
+    client = create_app(make_config(tmp_path)).test_client()
+
+    release = threading.Event()
+    real_exists = pathlib.Path.exists
+
+    def fake_exists(self, *args, **kwargs):
+        if self == hung:
+            release.wait(5)
+        elif self in slow:
+            time.sleep(0.3)
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "exists", fake_exists)
+    monkeypatch.setattr(file_status_module, "FILE_CHECK_DEADLINE_S", 1)
+    try:
+        start = time.perf_counter()
+        links = client.get("/api/graph").get_json()["links"]
+        elapsed = time.perf_counter() - start
+    finally:
+        release.set()
+
+    by_file = {link["file"]: link for link in links}
+    assert elapsed < 1.5  # 5 x 0.3 s sequentially would already be 1.5 s, plus the hung one
+    assert all(by_file[str(p)]["exists"] is False for p in slow)
+    # Not known to be missing, so not drawn as "not created yet".
+    assert by_file[str(hung)]["exists"] is True and by_file[str(hung)]["no_access"] is False

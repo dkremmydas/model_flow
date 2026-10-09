@@ -8,8 +8,9 @@ from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 from classes.Database import Database
+from classes.FileStatus import PROBLEM_STATUSES, file_statuses
 from classes.Lists import Lists
 from classes.Parser import Parser
 from classes.Config import Config
@@ -266,6 +267,132 @@ class ExecutionEngine:
 
         self.logger.info(f"Pipeline '{module}/{pipeline_name}' completed successfully ({total_steps} steps).")
         return 0
+
+    # ---- Input-file pre-flight check ---------------------------------------
+    # Front ends (model_flow.py's run_task/run_pipeline, web_gui/server.py)
+    # call these *before* starting a run and refuse to run when problems come
+    # back. Not enforced inside execute_task/execute_pipeline themselves, so a
+    # caller can still choose to override (the CLI's --ignore-missing-inputs).
+
+    def check_input_files(self, module: str, task_name: str,
+                          overrides: Optional[Dict[str, str]] = None) -> List[Dict]:
+        """
+        Problems with a task's role="input_file" files for one run with these
+        overrides: a list of {"task", "script_name", "path", "status"} with
+        status "missing" or "no_access" (see classes/FileStatus.py). Empty if
+        every input file exists, or the task isn't found (execute_task reports
+        that itself). A check that doesn't answer in time ("unknown") is not
+        reported -- a slow network drive shouldn't block a run on its own.
+        """
+        task = self.database.get_task(module, task_name)
+        if task is None:
+            return []
+        return self._input_file_problems(
+            [(task_name, script_name, path) for script_name, path in self._role_paths(task, overrides, "input_file")]
+        )
+
+    def check_pipeline_input_files(self, module: str, pipeline_name: str,
+                                   extra_overrides: Optional[Dict[str, Dict[str, str]]] = None) -> List[Dict]:
+        """
+        Same as check_input_files, for every execution execute_pipeline would
+        make (every task, every loop iteration, with the same override layering).
+        An input that an *earlier* step of the pipeline writes as an output_file
+        isn't checked, since it's expected not to exist until that step has run;
+        members of the same parallel group run concurrently, so they don't
+        count as producing inputs for each other.
+
+        Raises:
+            ValueError: If the module/pipeline isn't found.
+        """
+        pipeline = self.database.get_pipeline(module, pipeline_name)
+        if pipeline is None:
+            raise ValueError(
+                f"Pipeline '{pipeline_name}' not found in module '{module}'. "
+                f"Run 'build' first if this pipeline was just added."
+            )
+        extra_overrides = extra_overrides or {}
+        produced = set()
+        candidates = []
+        for raw_entry in pipeline.get("tasks", []):
+            if isinstance(raw_entry, dict) and "parallel" in raw_entry:
+                members = [Parser._as_task_entry(m) for m in raw_entry.get("parallel") or []]
+            else:
+                members = [Parser._as_task_entry(raw_entry)]
+            step_outputs = set()
+            for entry in members:
+                task = self.database.get_task(module, entry["task"])
+                if task is None:
+                    continue
+                for overrides in self._entry_override_sets(entry, extra_overrides):
+                    for script_name, path in self._role_paths(task, overrides, "input_file"):
+                        if self._path_key(path) not in produced:
+                            candidates.append((entry["task"], script_name, path))
+                    for _, path in self._role_paths(task, overrides, "output_file"):
+                        step_outputs.add(self._path_key(path))
+            produced |= step_outputs
+        return self._input_file_problems(candidates)
+
+    @staticmethod
+    def describe_input_file_problems(problems: List[Dict]) -> List[str]:
+        """One human-readable line per problem, shared by the CLI and web GUI."""
+        reasons = {"missing": "does not exist", "no_access": "no permission to access"}
+        return [
+            f"{p['task']}: {p['script_name']} = {p['path'] or '(empty)'} ({reasons.get(p['status'], p['status'])})"
+            for p in problems
+        ]
+
+    def _entry_override_sets(self, entry: dict, extra_overrides: dict) -> List[Dict]:
+        """The override dict of every execution _run_pipeline_entry would make
+        for this entry -- one, or one per loop iteration -- layered the same way."""
+        base = {**(entry.get("overrides") or {}), **extra_overrides.get(entry["task"], {})}
+        loop = entry.get("loop")
+        if loop is None:
+            return [base]
+        try:
+            iterations = Parser.expand_loop(loop, self.lists.get_elements)
+        except Exception:
+            # E.g. a list that no longer exists. The check shouldn't be what
+            # fails here -- skip this entry, and let the run report the broken
+            # loop itself as it always has.
+            return []
+        return [{**base, **values} for values in iterations]
+
+    def _role_paths(self, task: dict, overrides: Optional[dict], role: str) -> List[tuple]:
+        """(script_name, resolved path) for every config entry with this role,
+        using the override's value where one is given. Resolved the same way as
+        build_graph/the web GUI (relative to Database_directory unless
+        relative="0"); an empty value is kept as an empty path (never exists)."""
+        overrides = overrides or {}
+        result = []
+        for param in task.get("config", []):
+            script_name = param.get("script_name")
+            if param.get("role") != role or not script_name:
+                continue
+            value = str(overrides.get(script_name, param.get("script_value") or ""))
+            path = (Parser.resolve_role_path(self.config.get("Database_directory"), value, param.get("relative"))
+                    if value else None)
+            result.append((script_name, path))
+        return result
+
+    @staticmethod
+    def _path_key(path) -> str:
+        # Same normalization as Parser.build_graph's input/output matching.
+        return os.path.normcase(os.path.normpath(str(path))) if path is not None else ""
+
+    @staticmethod
+    def _input_file_problems(candidates: List[tuple]) -> List[Dict]:
+        """candidates: (task_name, script_name, path or None). Checks every path
+        concurrently and returns the de-duplicated problems, in order."""
+        statuses = file_statuses(path for _, _, path in candidates if path is not None)
+        problems, seen = [], set()
+        for task_name, script_name, path in candidates:
+            status = statuses[str(path)] if path is not None else "missing"
+            key = (task_name, script_name, str(path or ""))
+            if status in PROBLEM_STATUSES and key not in seen:
+                seen.add(key)
+                problems.append({"task": task_name, "script_name": script_name,
+                                 "path": str(path or ""), "status": status})
+        return problems
 
     @staticmethod
     def execution_key(step_index: int, task_name: str, iteration_index: int) -> str:

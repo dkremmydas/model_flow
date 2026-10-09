@@ -103,6 +103,8 @@ python model_flow.py run_task --config model_flow.config.json --module <name> --
   values today, declare a List-driven loop in a pipeline instead (see
   [pipelines.md](pipelines.md)).
 
+- `--ignore-missing-inputs` (optional) — see "Input file check" below.
+
 Parameter types passed via `--set` are auto-detected:
 numbers (`1`, `3.14`), booleans (`true`, `false`), and strings (quote if the
 value contains spaces).
@@ -124,8 +126,28 @@ python model_flow.py run_pipeline --config model_flow.config.json --module <name
 - `--output_dir <directory>` (optional) — applied to every task in the
   pipeline; defaults to `Temporary_directory` from the config
 
+- `--ignore-missing-inputs` (optional) — see "Input file check" below.
+
 Unlike `run_task`, a non-zero pipeline result propagates to the process exit
 code.
+
+### Input file check
+
+Before anything runs, `run_task` and `run_pipeline` check that every
+`role="input_file"` parameter points to a file that exists and can be
+accessed. They use the values the run would actually use: `--set`
+overrides, and a pipeline's own overrides and every loop iteration. Relative
+values are resolved against `Database_directory` unless `relative="0"`. If
+any file is missing or inaccessible, each one is listed, **nothing is run**,
+and the command exits with code 1.
+
+- For a pipeline, an input that an earlier step writes as an `output_file`
+  isn't checked, since it's expected not to exist yet. Tasks in the same
+  parallel group don't count as producing inputs for each other.
+- `--ignore-missing-inputs` runs anyway. The problems are still listed, as
+  warnings.
+- The web GUI runs the same check when you press Run and refuses to start
+  the run. It has no override.
 
 ## run_gui
 
@@ -143,7 +165,7 @@ Starts a local web server for the browser-based GUI (see [gui.md](gui.md));
 open the address it prints (default `http://127.0.0.1:8765`) in a browser.
 
 ```bash
-python model_flow.py run_web_gui [--config model_flow.config.json] [--host 127.0.0.1] [--port 8765]
+python model_flow.py run_web_gui [--config model_flow.config.json] [--host 127.0.0.1] [--port 8765] [--no-build]
 ```
 
 - `--config <file>` (optional) — defaults to `config.json` if omitted
@@ -152,6 +174,10 @@ python model_flow.py run_web_gui [--config model_flow.config.json] [--host 127.0
   including the ability to run tasks, to anyone on your network; there is
   no authentication.
 - `--port <number>` (optional) — defaults to `8765`
+- `--build` / `--no-build` (optional) — by default the database is rebuilt
+  from `Code_directory` (same as `build`) before the server starts; pass
+  `--no-build` to start from the existing database as-is. A failed startup
+  rebuild only logs a warning and falls back to the existing database.
 
 ## Examples
 

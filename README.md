@@ -227,7 +227,7 @@ Language-specific syntax and worked examples: [docs/r-tasks.md](docs/r-tasks.md)
 | `run_task`     | Execute one task                                |
 | `run_pipeline` | Execute a declared pipeline                     |
 | `run_gui`      | Launch the Textual-based (terminal) GUI         |
-| `run_web_gui`  | Launch the browser-based GUI (`--host`, `--port`, default `127.0.0.1:8765`) |
+| `run_web_gui`  | Launch the browser-based GUI (`--host`, `--port`, default `127.0.0.1:8765`; rebuilds the database first unless `--no-build`) |
 
 ```bash
 python model_flow.py run_task --config model_flow.config.json --module data --task prepare_data --set input_file=raw/other.csv

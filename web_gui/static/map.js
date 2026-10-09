@@ -321,6 +321,7 @@ function groupLinks(rawLinks, sourceKey, targetKey) {
             from_task: link.from_task,
             to_task: link.to_task,
             exists: link.exists,
+            no_access: link.no_access,
         });
     }
     return [...groups.values()];
@@ -368,6 +369,7 @@ function computeGraph() {
             from_task: l.from_task,
             to_task: l.to_task,
             exists: l.exists,
+            no_access: l.no_access,
         }))
         .filter((l) => l.sourceId !== l.targetId);
     const edges = groupLinks(rawLinks, "sourceId", "targetId");
@@ -793,10 +795,10 @@ function showEdgeDetail(edge) {
 
     const body = document.getElementById("map-detail-body");
     body.innerHTML = "";
-    // A file always carries the same exists value across every contribution
-    // it appears in, so a Map dedupes the same way the old Set did while also
-    // keeping that value.
-    const files = new Map(edge.contributions.map((c) => [c.file, c.exists]));
+    // A file always carries the same exists/no_access values across every
+    // contribution it appears in, so a Map dedupes the same way the old Set
+    // did while also keeping those values.
+    const files = new Map(edge.contributions.map((c) => [c.file, c]));
 
     const heading = document.createElement("div");
     heading.className = "small fw-semibold mb-1";
@@ -805,8 +807,9 @@ function showEdgeDetail(edge) {
 
     const list = document.createElement("ul");
     list.className = "small ps-3 mb-0";
-    for (const [file, exists] of files) {
-        list.appendChild(exists ? buildInspectableFileItem(file) : buildMissingFileItem(file));
+    for (const [file, c] of files) {
+        if (c.no_access) list.appendChild(buildNoAccessFileItem(file));
+        else list.appendChild(c.exists ? buildInspectableFileItem(file) : buildMissingFileItem(file));
     }
     body.appendChild(list);
 }
@@ -818,6 +821,18 @@ function buildMissingFileItem(file) {
     const note = document.createElement("span");
     note.className = "fst-italic";
     note.textContent = "(not created yet)";
+    li.appendChild(note);
+    return li;
+}
+
+function buildNoAccessFileItem(file) {
+    const li = document.createElement("li");
+    li.className = "text-break map-missing-file";
+    li.title = "No permission to access this file";
+    li.textContent = file + " ";
+    const note = document.createElement("span");
+    note.className = "fst-italic";
+    note.textContent = "(no permission to access)";
     li.appendChild(note);
     return li;
 }
@@ -1111,6 +1126,12 @@ function showTaskDetail(node) {
                 const row = document.createElement("div");
                 row.className = "small mb-1";
                 row.innerHTML = `<strong>${param.script_name || param.name}</strong> (${param.role || "parameter"}): ${param.script_value ?? ""}`;
+                // Server sets file_status on every role="input_file" (see server.py's _file_status).
+                const note = { missing: "This input file does not exist", no_access: "No permission to access this input file" }[param.file_status];
+                if (note) {
+                    row.classList.add("map-missing-file");
+                    row.title = param.resolved_path ? `${note}:\n${param.resolved_path}` : note;
+                }
                 body.appendChild(row);
             }
         });

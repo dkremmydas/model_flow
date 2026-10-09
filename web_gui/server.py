@@ -29,6 +29,7 @@ from classes.Config import Config
 from classes.Database import Database
 from classes.ExecutionEngine import ExecutionEngine, ExecutionResult
 from classes.FileInspector import FileInspector
+from classes.FileStatus import file_status as _file_status, file_statuses as _file_statuses
 from classes.Lists import Lists
 from classes.Parser import Parser
 
@@ -156,6 +157,50 @@ def create_app(config: Config) -> Flask:
     lists = Lists(config)
     run_state = RunState()
 
+    def refuse_missing_inputs(problems: List[Dict]):
+        """400 refusal for a run whose input files are missing or
+        inaccessible (ExecutionEngine.check_input_files), or None if there are
+        none. Unlike the CLI there is no override -- the run is not started."""
+        if not problems:
+            return None
+        return jsonify({
+            "error": f"Not run: {len(problems)} input file(s) missing or inaccessible",
+            "missing_inputs": ExecutionEngine.describe_input_file_problems(problems),
+        }), 400
+
+    def with_input_file_status(configs: List[tuple]) -> List[List[Dict]]:
+        """For each (task_config, overrides) pair, a copy of task_config where
+        every role="input_file" entry also carries "file_status" (see
+        _file_status; checked live, like api_graph's link["exists"]) for its
+        effective value -- the pipeline's override if one is given, else its
+        script_value. Every pair's files are checked in one concurrent batch
+        (see _file_statuses). Copies rather than mutating, since these dicts
+        are the Database's own cached task data."""
+        resolved_by_param = {}
+        for config_index, (task_config, overrides) in enumerate(configs):
+            for param_index, param in enumerate(task_config):
+                if param.get("role") == "input_file" and param.get("script_name"):
+                    value = str((overrides or {}).get(param["script_name"], param.get("script_value") or ""))
+                    resolved_by_param[(config_index, param_index)] = (
+                        Parser.resolve_role_path(config.get("Database_directory"), value, param.get("relative"))
+                        if value else None
+                    )
+        statuses = _file_statuses(p for p in resolved_by_param.values() if p is not None)
+
+        result = []
+        for config_index, (task_config, _) in enumerate(configs):
+            new_config = []
+            for param_index, param in enumerate(task_config):
+                if (config_index, param_index) in resolved_by_param:
+                    resolved = resolved_by_param[(config_index, param_index)]
+                    # resolved_path: where it actually looked (a relative value is
+                    # resolved against Database_directory), for the hover note.
+                    param = {**param, "file_status": statuses[str(resolved)] if resolved else "missing",
+                             "resolved_path": str(resolved) if resolved else ""}
+                new_config.append(param)
+            result.append(new_config)
+        return result
+
     @app.route("/")
     def index():
         return send_from_directory(app.static_folder, "index.html")
@@ -195,6 +240,7 @@ def create_app(config: Config) -> Flask:
         task = database.get_task(module, task_name)
         if task is None:
             return jsonify({"error": "task not found"}), 404
+        task = {**task, "config": with_input_file_status([(task.get("config", []), None)])[0]}
         return jsonify({"task": task, "history": database.get_user_values(module, task_name)})
 
     @app.route("/api/pipeline/<path:module>/<pipeline_name>")  # see api_task's comment above
@@ -223,8 +269,14 @@ def create_app(config: Config) -> Flask:
                 "parallel_group": group,
                 "parallel_group_workers": group_workers.get(group) if group else None,
                 "config": task.get("config", []) if task else [],
+                "overrides_for_status": entry.get("overrides"),
                 "history": database.get_user_values(module, task_name) if task else {},
             })
+
+        # Every task's input files checked in one concurrent batch.
+        checked = with_input_file_status([(t["config"], t.pop("overrides_for_status")) for t in tasks])
+        for task_entry, task_config in zip(tasks, checked):
+            task_entry["config"] = task_config
 
         return jsonify({"pipeline": pipeline, "tasks": tasks})
 
@@ -236,6 +288,9 @@ def create_app(config: Config) -> Flask:
         overrides = body.get("overrides") or {}
         if not module or not task_name:
             return jsonify({"error": "'module' and 'task' are required"}), 400
+        refusal = refuse_missing_inputs(engine.check_input_files(module, task_name, overrides or None))
+        if refusal:
+            return refusal
 
         def work(record: RunRecord):
             record.outputs_info = [{"module": module, "task": task_name, "overrides": overrides}]
@@ -267,6 +322,13 @@ def create_app(config: Config) -> Flask:
         extra_overrides = body.get("overrides") or {}
         if not module or not pipeline_name:
             return jsonify({"error": "'module' and 'pipeline' are required"}), 400
+        try:
+            problems = engine.check_pipeline_input_files(module, pipeline_name, extra_overrides)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 404
+        refusal = refuse_missing_inputs(problems)
+        if refusal:
+            return refusal
 
         def work(record: RunRecord):
             # One entry per non-looped step, with the same overrides merge order
@@ -401,8 +463,14 @@ def create_app(config: Config) -> Flask:
         # graph itself was last rebuilt (mirrors /api/run/<id>/outputs' own
         # {"exists": resolved.exists()} pattern). .exists() rather than
         # .is_file() since an input/output can also be a folder.
-        for link in graph.get("links", []):
-            link["exists"] = Path(link["file"]).exists()
+        # An inaccessible file isn't known to be missing, so it isn't drawn as
+        # "not created yet"; no_access lets the map flag it separately.
+        links = graph.get("links", [])
+        statuses = _file_statuses(link["file"] for link in links)
+        for link in links:
+            status = statuses[str(Path(link["file"]))]
+            link["exists"] = status != "missing"
+            link["no_access"] = status == "no_access"
         return jsonify(graph)
 
     @app.route("/api/inspect")
@@ -429,7 +497,10 @@ def create_app(config: Config) -> Flask:
                 return jsonify({"error": "file is not part of the dependency graph"}), 403
 
         resolved = Path(file_path)
-        if not resolved.exists():
+        status = _file_status(resolved)
+        if status == "no_access":
+            return jsonify({"exists": True, "error": "No permission to access this file."}), 403
+        if status == "missing":
             # Race-condition backstop -- the frontend already knows a file's
             # existence from /api/graph and won't normally offer to inspect
             # one it knows doesn't exist yet. .exists() rather than
@@ -462,7 +533,9 @@ def create_app(config: Config) -> Flask:
                 if value is None:
                     continue
                 resolved = Parser.resolve_role_path(config.get("Database_directory"), value, param.get("relative"))
-                files.append({"script_name": script_name, "value": value, "exists": resolved.exists()})
+                status = _file_status(resolved)
+                files.append({"script_name": script_name, "value": value,
+                              "exists": status == "exists", "no_access": status == "no_access"})
             if files:
                 result.append({"module": info["module"], "task": info["task"], "files": files})
         return jsonify(result)
@@ -489,6 +562,8 @@ def create_app(config: Config) -> Flask:
 
         value = info["overrides"].get(script_name, param.get("script_value"))
         resolved = Parser.resolve_role_path(config.get("Database_directory"), value, param.get("relative"))
+        if _file_status(resolved) == "no_access":
+            return jsonify({"error": "no permission to access this file"}), 403
         if not resolved.is_file():
             return jsonify({"error": "file not found on disk"}), 404
         return send_file(resolved, as_attachment=True)
