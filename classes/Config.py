@@ -36,6 +36,15 @@ class Config:
 
     OPTIONAL_DIRECTORY_KEYS = ["Pandoc_dir"]  # Optional keys that, when given, must be valid directories
 
+    @staticmethod
+    def _normalize_path_input(value: str) -> str:
+        """
+        Tidy a path typed/pasted at an init() prompt: strip surrounding quotes (as added by
+        Windows Explorer's "Copy as path") and use forward slashes, which every consumer
+        accepts and which keep the saved JSON readable (no doubled backslashes).
+        """
+        return value.strip().strip('"').strip("'").replace("\\", "/")
+
     def __init__(self, config_source: str = None):
         """
         Initialize the Config object.
@@ -160,7 +169,7 @@ class Config:
 
         for key, prompt in Config.REQUIRED_KEYS.items():
             while True:
-                value = input(prompt).strip()
+                value = Config._normalize_path_input(input(prompt))
                 path = Path(value)
 
                 if key in Config.DIRECTORY_KEYS:
@@ -185,6 +194,8 @@ class Config:
         for key, prompt in Config.OPTIONAL_KEYS.items():
             while True:
                 value = input(prompt).strip()
+                if value and key in Config.OPTIONAL_DIRECTORY_KEYS:
+                    value = Config._normalize_path_input(value)
                 if value and key in Config.OPTIONAL_DIRECTORY_KEYS and not Path(value).is_dir():
                     print(f"Warning: '{value}' is not a valid directory. Please try again.")
                     continue

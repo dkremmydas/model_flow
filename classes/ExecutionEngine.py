@@ -424,8 +424,11 @@ class ExecutionEngine:
 
             # Set output directory (default to config's Temporary_directory or current dir)
             output_dir = Path(output_dir or self.config.get("Temporary_directory", "."))
+            # Create it on demand rather than failing: Temporary_directory is only
+            # auto-created by `init`, so a hand-written config (or one whose folder
+            # was since deleted) can point at a directory that doesn't exist yet.
             if not output_dir.exists():
-                raise FileNotFoundError(f"Output directory does not exist: {output_dir}")
+                output_dir.mkdir(parents=True, exist_ok=True)
             if not output_dir.is_dir():
                 raise NotADirectoryError(f"Path is not a directory: {output_dir}")
 

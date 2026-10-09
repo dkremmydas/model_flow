@@ -222,6 +222,20 @@ def test_execute_rmd_task_sets_gams_dir_on_path(engine, fake_call, tmp_path):
     assert "input = 'C:/scripts/test_script.rmd'" in render_script
 
 
+def test_execute_rmd_task_creates_missing_output_dir(engine, fake_call, tmp_path):
+    task = {
+        "name": "1_test_rmd",
+        "file_path": "C:/scripts/test_script.rmd",
+        "config": [],
+    }
+    missing_dir = tmp_path / "not" / "yet" / "created"
+
+    result = engine._execute_rmd_task(task, output_dir=str(missing_dir))
+
+    assert result == 0
+    assert missing_dir.is_dir()
+
+
 def test_execute_task_applies_overrides_without_mutating_database(engine_with_task, fake_call):
     result = engine_with_task.execute_task("test_module", "1_test_task", overrides={"ext_par": "99"})
 

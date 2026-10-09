@@ -30,11 +30,11 @@ def test_create_from_user_input_retries_invalid_directory_and_executable_paths(t
     with patch("builtins.input", lambda prompt="": next(inputs)):
         config = Config.create_from_user_input()
 
-    assert config.data["Code_directory"] == str(good_code_dir)
-    assert config.data["Database_directory"] == str(good_db_dir)
-    assert config.data["Rscript_exe"] == str(rscript)
-    assert config.data["GAMS_exe"] == str(gams)
-    assert config.data["Pandoc_dir"] == str(good_code_dir)
+    assert config.data["Code_directory"] == good_code_dir.as_posix()
+    assert config.data["Database_directory"] == good_db_dir.as_posix()
+    assert config.data["Rscript_exe"] == rscript.as_posix()
+    assert config.data["GAMS_exe"] == gams.as_posix()
+    assert config.data["Pandoc_dir"] == good_code_dir.as_posix()
     assert config.data["Project_title"] == "My Project"
     assert tmp_dir.is_dir()  # auto-created for the DIRECTORY_CREATE key
 
@@ -69,3 +69,33 @@ def test_create_from_user_input_skips_blank_project_title(tmp_path):
 
     assert "Pandoc_dir" not in config.data
     assert "Project_title" not in config.data
+
+
+def test_create_from_user_input_normalizes_backslashes_and_quotes(tmp_path):
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    rscript = tmp_path / "Rscript.exe"
+    rscript.write_text("")
+    gams = tmp_path / "gams.exe"
+    gams.write_text("")
+
+    inputs = iter([
+        str(code_dir).replace("/", "\\"),          # backslash-separated
+        f'"{str(db_dir)}"',                          # quoted, as from Explorer's "Copy as path"
+        str(tmp_path / "tmp"),
+        str(rscript),
+        str(gams),
+        f'"{str(code_dir)}"',                        # optional Pandoc_dir, quoted too
+        "",
+    ])
+
+    with patch("builtins.input", lambda prompt="": next(inputs)):
+        config = Config.create_from_user_input()
+
+    for key in ("Code_directory", "Database_directory", "Temporary_directory", "Rscript_exe", "GAMS_exe", "Pandoc_dir"):
+        assert "\\" not in config.data[key]
+        assert '"' not in config.data[key]
+    assert config.data["Code_directory"] == code_dir.as_posix()
+    assert config.data["Database_directory"] == db_dir.as_posix()
