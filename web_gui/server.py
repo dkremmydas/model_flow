@@ -171,6 +171,13 @@ def create_app(config: Config) -> Flask:
             {
                 "module": module,
                 "tasks": database.list_module_tasks(module),
+                # Kept as a separate name -> filetype map rather than turning
+                # "tasks" into objects, since the frontend matches/selects tasks
+                # by plain name string throughout.
+                "task_types": {
+                    task["name"]: task.get("filetype", "")
+                    for task in database.get_module(module) or []
+                },
                 "pipelines": database.list_pipelines(module),
             }
             for module in database.list_modules()

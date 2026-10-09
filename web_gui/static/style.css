@@ -67,6 +67,17 @@
     border-radius: 0.25rem;
 }
 
+#tree-container .tree-item-type {
+    margin-left: 0.35rem;
+    font-size: 0.75em;
+    color: var(--bs-secondary-color);
+}
+
+#tree-container .tree-item.active .tree-item-type {
+    color: inherit;
+    opacity: 0.8;
+}
+
 #tree-container .tree-item:hover {
     background: var(--bs-secondary-bg);
 }

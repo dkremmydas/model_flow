@@ -159,7 +159,12 @@ def test_api_tree_lists_modules_tasks_and_pipelines(tmp_path):
     resp = client.get("/api/tree")
     assert resp.status_code == 200
     assert resp.get_json() == [
-        {"module": "test_module", "tasks": ["1_test_task"], "pipelines": ["full_run"]}
+        {
+            "module": "test_module",
+            "tasks": ["1_test_task"],
+            "task_types": {"1_test_task": ".r"},
+            "pipelines": ["full_run"],
+        }
     ]
 
 

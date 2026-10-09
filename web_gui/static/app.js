@@ -321,7 +321,8 @@ function renderModuleNode(container, node, query, depth) {
         tasksLabel.textContent = "Tasks";
         fragment.appendChild(tasksLabel);
         for (const taskName of matchingTasks) {
-            fragment.appendChild(makeTreeItem(entry.module, taskName, "task", depth));
+            const filetype = (entry.task_types || {})[taskName];
+            fragment.appendChild(makeTreeItem(entry.module, taskName, "task", depth, filetype));
         }
     }
 
@@ -351,12 +352,23 @@ function renderModuleNode(container, node, query, depth) {
     return true;
 }
 
-function makeTreeItem(module, name, kind, depth) {
+// Short, human-readable label for a task's script type, shown as a badge
+// next to its name in the tree.
+const FILETYPE_LABELS = { ".r": "R", ".rmd": "Rmd", ".gms": "GAMS", ".bat": "bat" };
+
+function makeTreeItem(module, name, kind, depth, filetype) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "tree-item";
     btn.style.setProperty("--depth", depth);
     btn.textContent = name;
+    const typeLabel = filetype ? (FILETYPE_LABELS[filetype.toLowerCase()] || filetype.replace(/^\./, "")) : "";
+    if (typeLabel) {
+        const badge = document.createElement("span");
+        badge.className = "tree-item-type";
+        badge.textContent = `(${typeLabel})`;
+        btn.appendChild(badge);
+    }
     btn.dataset.module = module;
     btn.dataset.name = name;
     btn.dataset.kind = kind;
