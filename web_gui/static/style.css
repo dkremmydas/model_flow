@@ -373,6 +373,36 @@ body.map-resizing {
     stroke-width: 3px;
 }
 
+/* Per-node "−"/"+" toggle that switches the node's arcs off/on (map.js). */
+.map-link-group.toggled-off {
+    display: none;
+}
+
+.map-edge-toggle {
+    cursor: pointer;
+}
+
+.map-edge-toggle circle {
+    fill: var(--bs-body-bg);
+    stroke: var(--bs-secondary-color);
+    stroke-width: 1px;
+}
+
+.map-edge-toggle:hover circle {
+    stroke: var(--bs-warning);
+    stroke-width: 2px;
+}
+
+.map-node .map-edge-toggle text {
+    font-size: 11px;
+    font-weight: 700;
+    fill: var(--bs-secondary-color);
+}
+
+.map-edge-toggle.off circle {
+    fill: var(--bs-secondary-bg);
+}
+
 .map-expanded-chip {
     font-weight: 400;
 }

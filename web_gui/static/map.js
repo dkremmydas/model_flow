@@ -19,6 +19,12 @@ let currentEdges = [];
 let lastLayoutSize = null;
 let moduleColorScale = null;
 
+// Node ids whose arcs were switched off via the node's own "−"/"+" toggle.
+// Purely visual (the edges stay in the dagre layout, so toggling never
+// reshuffles the graph) -- an edge is hidden when *either* endpoint is in
+// here. Not persisted: node ids change with expand/collapse state anyway.
+let edgesHiddenNodeIds = new Set();
+
 // Modules unchecked in the "Modules" sidebar list -- excluded entirely from
 // computeGraph()'s nodes/edges (not just dimmed like the extension filter),
 // since a hidden node's id would otherwise still be referenced by a dagre edge.
@@ -573,6 +579,27 @@ function renderGraph(nodes, edges) {
         })
         .attr("transform", (d) => `translate(${d.x},${d.y})`);
 
+    // "−"/"+" toggle at each connected node's top-right corner, switching
+    // that node's arcs off/on. Only nodes with at least one edge get one.
+    const connectedIds = new Set(edges.flatMap((e) => [e.source.id, e.target.id]));
+    const edgeToggle = nodeGroup.filter((d) => connectedIds.has(d.id))
+        .append("g")
+        .attr("class", "map-edge-toggle")
+        .attr("transform", (d) => (d.kind === "module" ? "translate(19,-19)" : "translate(13,-13)"));
+    edgeToggle.append("circle").attr("r", 6);
+    edgeToggle.append("text").attr("text-anchor", "middle").attr("dy", "0.35em");
+    edgeToggle.append("title");
+    // Swallow mousedown so d3.drag (on the node) and d3.zoom (on the svg)
+    // never start from a click on the toggle.
+    edgeToggle.on("mousedown", (event) => event.stopPropagation());
+    edgeToggle.on("click", (event, d) => {
+        event.stopPropagation();
+        if (edgesHiddenNodeIds.has(d.id)) edgesHiddenNodeIds.delete(d.id);
+        else edgesHiddenNodeIds.add(d.id);
+        applyEdgeToggles();
+        applyChainHighlight();
+    });
+
     nodeGroup.on("click", (event, d) => {
         event.stopPropagation();
         if (d.kind === "module") {
@@ -597,8 +624,21 @@ function renderGraph(nodes, edges) {
     );
 
     applyExtensionFilter();
+    applyEdgeToggles();
     applyChainHighlight();
     applyEdgeSelection();
+}
+
+function isEdgeToggledOff(e) {
+    return edgesHiddenNodeIds.has(e.source.id) || edgesHiddenNodeIds.has(e.target.id);
+}
+
+function applyEdgeToggles() {
+    linkLayer.selectAll("g.map-link-group").classed("toggled-off", isEdgeToggledOff);
+    const toggles = nodeLayer.selectAll("g.map-edge-toggle");
+    toggles.classed("off", (d) => edgesHiddenNodeIds.has(d.id));
+    toggles.select("text").text((d) => (edgesHiddenNodeIds.has(d.id) ? "+" : "−"));
+    toggles.select("title").text((d) => (edgesHiddenNodeIds.has(d.id) ? "Show links" : "Hide links"));
 }
 
 function applyEdgeSelection() {
@@ -669,7 +709,8 @@ function applyChainHighlight() {
         linkLayer.selectAll("path").classed("not-in-chain", false);
         return;
     }
-    const chain = connectedNodeIds(selectedNodeId, currentEdges);
+    // Arcs switched off via a node's "−" toggle don't carry the chain.
+    const chain = connectedNodeIds(selectedNodeId, currentEdges.filter((e) => !isEdgeToggledOff(e)));
     nodeLayer.selectAll("g.map-node")
         .classed("not-in-chain", (d) => !chain.has(d.id))
         .classed("selected", (d) => d.id === selectedNodeId);
